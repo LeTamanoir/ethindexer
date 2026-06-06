@@ -1,0 +1,5 @@
+.tmp-*
+.DS_Store
+.cache/
+coverage.out
+*.test

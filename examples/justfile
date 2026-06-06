@@ -1,0 +1,8 @@
+_default:
+    @just --list
+
+abigen:
+    abigen --abi ./contracts/erc20.json --pkg contracts --v2 --type ERC20 --out ./contracts/erc20.go
+
+build:
+    go build -o ./bin/weth ./weth/
