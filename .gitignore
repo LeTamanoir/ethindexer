@@ -1,5 +1,6 @@
 .tmp-*
 .DS_Store
 .cache/
-coverage.out
+*.out
 *.test
+*.prof

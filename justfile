@@ -17,9 +17,21 @@ coverage:
     go tool cover -html=coverage.out && \
     rm coverage.out
 
-# Run benchmarks
+# Run benchmarks and output profiles
 bench:
-    go test -bench . -benchmem
+    go test -bench=. -run=^$ -benchmem -cpuprofile cpu.prof -memprofile mem.prof -trace trace.out
+
+# View CPU profile in browser
+pprof-cpu:
+    go tool pprof -http=:8080 cpu.prof
+
+# View memory profile in browser
+pprof-mem:
+    go tool pprof -http=:8080 mem.prof
+
+# View execution trace in browser
+trace:
+    go tool trace trace.out
 
 # Run go vet
 vet:
@@ -34,4 +46,5 @@ check: fmt vet test
 
 # Clean build caches
 clean:
-    go clean -cache -testcache
+    go clean -cache -testcache && \
+    rm cpu.prof mem.prof trace.out
