@@ -15,26 +15,6 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
-var ErrReorg = errors.New("chain reorg detected")
-
-type Client interface {
-	ethereum.ChainReader
-	ethereum.LogFilterer
-}
-
-type Handler interface {
-	Snapshot() ([]byte, error)
-	Restore([]byte) error
-	Filter() Filter
-	Process(ctx context.Context, log *types.Log) error
-}
-
-type Cache interface {
-	Load(name string, out any) (ok bool, err error)
-	Save(name string, v any) error
-	Delete(name string) error
-}
-
 type blockHeader struct {
 	Number uint64
 	Hash   common.Hash
@@ -43,12 +23,6 @@ type blockHeader struct {
 type checkpoint struct {
 	Header blockHeader
 	State  []byte
-}
-
-type Filter struct {
-	FromBlock uint64
-	Addresses []common.Address
-	Topics    [][]common.Hash
 }
 
 type Indexer struct {
@@ -82,6 +56,10 @@ func (idx *Indexer) Run(ctx context.Context) error {
 		// if coming from [Indexer.Stop]
 		if err == nil {
 			return nil
+		}
+		// Retry on reorgs
+		if errors.Is(err, ErrReorg) {
+			continue
 		}
 
 		retryable := idx.retryFunc != nil && idx.retryFunc(err, attempt)
