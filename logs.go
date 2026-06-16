@@ -2,7 +2,6 @@ package ethindex
 
 import (
 	"encoding/binary"
-	"fmt"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -74,80 +73,63 @@ func appendLog(b []byte, l types.Log) []byte {
 }
 
 func unmarshalLog(b []byte, l *types.Log) (out []byte, err error) {
-	need := func(n int) error {
-		if len(b) < n {
-			return fmt.Errorf("buffer too short: need %d, have %d", n, len(b))
-		}
-		return nil
+	b, err = decodeAddress(b, &l.Address)
+	if err != nil {
+		return
 	}
 
-	if err = need(common.AddressLength); err != nil {
+	var topicsLen uint64
+	b, err = decodeUint64(b, &topicsLen)
+	if err != nil {
 		return
 	}
-	l.Address = common.BytesToAddress(b[:common.AddressLength])
-	b = b[common.AddressLength:]
 
-	if err = need(8); err != nil {
-		return
-	}
-	topicsLen := binary.LittleEndian.Uint64(b[:8])
-	b = b[8:]
-	if err = need(int(topicsLen) * common.HashLength); err != nil {
-		return
-	}
 	l.Topics = make([]common.Hash, topicsLen)
 	for i := range l.Topics {
-		l.Topics[i] = common.BytesToHash(b[:common.HashLength])
-		b = b[common.HashLength:]
+		b, err = decodeHash(b, &l.Topics[i])
+		if err != nil {
+			return
+		}
 	}
 
-	if err = need(8); err != nil {
+	b, err = decodeBytes(b, &l.Data)
+	if err != nil {
 		return
 	}
-	dataLen := binary.LittleEndian.Uint64(b[:8])
-	b = b[8:]
-	if err = need(int(dataLen)); err != nil {
-		return
-	}
-	l.Data = make([]byte, dataLen)
-	copy(l.Data, b[:dataLen])
-	b = b[dataLen:]
 
-	if err = need(8); err != nil {
+	b, err = decodeUint64(b, &l.BlockNumber)
+	if err != nil {
 		return
 	}
-	l.BlockNumber = binary.LittleEndian.Uint64(b[:8])
-	b = b[8:]
 
-	if err = need(common.HashLength); err != nil {
+	b, err = decodeHash(b, &l.TxHash)
+	if err != nil {
 		return
 	}
-	l.TxHash = common.BytesToHash(b[:common.HashLength])
-	b = b[common.HashLength:]
 
-	if err = need(8); err != nil {
+	var txIndex uint64
+	b, err = decodeUint64(b, &txIndex)
+	if err != nil {
 		return
 	}
-	l.TxIndex = uint(binary.LittleEndian.Uint64(b[:8]))
-	b = b[8:]
+	l.TxIndex = uint(txIndex)
 
-	if err = need(common.HashLength); err != nil {
+	b, err = decodeHash(b, &l.BlockHash)
+	if err != nil {
 		return
 	}
-	l.BlockHash = common.BytesToHash(b[:common.HashLength])
-	b = b[common.HashLength:]
 
-	if err = need(8); err != nil {
+	b, err = decodeUint64(b, &l.BlockTimestamp)
+	if err != nil {
 		return
 	}
-	l.BlockTimestamp = binary.LittleEndian.Uint64(b[:8])
-	b = b[8:]
 
-	if err = need(8); err != nil {
+	var index uint64
+	b, err = decodeUint64(b, &index)
+	if err != nil {
 		return
 	}
-	l.Index = uint(binary.LittleEndian.Uint64(b[:8]))
-	b = b[8:]
+	l.Index = uint(index)
 
 	return b, nil
 }

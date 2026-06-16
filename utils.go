@@ -1,6 +1,7 @@
 package ethindex
 
 import (
+	"encoding/binary"
 	"fmt"
 	"io"
 	"os"
@@ -8,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/common"
 )
 
 func atomicWrite(filename string, fn func(io.Writer) error) error {
@@ -71,4 +73,43 @@ func filterQueryKey(q ethereum.FilterQuery) string {
 	}
 
 	return sb.String()
+}
+
+func decodeUint64(b []byte, out *uint64) ([]byte, error) {
+	const uint64Size = 8
+	if len(b) < uint64Size {
+		return nil, fmt.Errorf("buffer too short: need %d, have %d", uint64Size, len(b))
+	}
+	*out = binary.LittleEndian.Uint64(b)
+	return b[uint64Size:], nil
+}
+
+func decodeHash(b []byte, out *common.Hash) ([]byte, error) {
+	if len(b) < common.HashLength {
+		return nil, fmt.Errorf("buffer too short: need %d, have %d", common.HashLength, len(b))
+	}
+	out.SetBytes(b)
+	return b[common.HashLength:], nil
+}
+
+func decodeBytes(b []byte, out *[]byte) ([]byte, error) {
+	var l uint64
+	b, err := decodeUint64(b, &l)
+	if err != nil {
+		return nil, err
+	}
+	if len(b) < int(l) {
+		return nil, fmt.Errorf("buffer too short: need %d, have %d", l, len(b))
+	}
+	*out = make([]byte, l)
+	copy(*out, b[:l])
+	return b[l:], nil
+}
+
+func decodeAddress(b []byte, out *common.Address) ([]byte, error) {
+	if len(b) < common.AddressLength {
+		return nil, fmt.Errorf("buffer too short: need %d, have %d", common.AddressLength, len(b))
+	}
+	out.SetBytes(b)
+	return b[common.AddressLength:], nil
 }
