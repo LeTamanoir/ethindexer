@@ -214,7 +214,7 @@ func (idx *Indexer) fetchLogs(ctx context.Context, from, to uint64) ([]types.Log
 
 	key := filterQueryKey(query)
 
-	var cached Logs
+	var cached logs
 	ok, err := idx.cache.Load(key, &cached)
 	if err != nil {
 		return nil, err
@@ -223,15 +223,15 @@ func (idx *Indexer) fetchLogs(ctx context.Context, from, to uint64) ([]types.Log
 		return cached, nil
 	}
 
-	logs, err := idx.http.FilterLogs(ctx, query)
+	l, err := idx.http.FilterLogs(ctx, query)
 	if err != nil {
 		return nil, err
 	}
-	if err := idx.cache.Save(key, Logs(logs)); err != nil {
+	if err := idx.cache.Save(key, logs(l)); err != nil {
 		return nil, err
 	}
 
-	return logs, nil
+	return l, nil
 }
 
 func (idx *Indexer) restore(ctx context.Context) error {

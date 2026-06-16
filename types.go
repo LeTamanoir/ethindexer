@@ -2,7 +2,6 @@ package ethindex
 
 import (
 	"context"
-	"encoding"
 	"errors"
 	"math/big"
 
@@ -53,10 +52,10 @@ type Handler interface {
 type Cache interface {
 	// Load retrieves the value stored under name and unmarshals it into out.
 	// It returns ok = false if no value exists for that name.
-	Load(name string, out encoding.BinaryUnmarshaler) (ok bool, err error)
+	Load(name string, out any) (ok bool, err error)
 
 	// Save persists v under the given name, overwriting any existing value.
-	Save(name string, v encoding.BinaryMarshaler) error
+	Save(name string, v any) error
 
 	// Delete removes the entry stored under name from the cache.
 	Delete(name string) error

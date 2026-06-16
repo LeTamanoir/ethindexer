@@ -2,49 +2,61 @@ package ethindex
 
 import (
 	"encoding/binary"
+	"encoding/gob"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 )
 
-type Logs []types.Log
+type logs []types.Log
 
-func (ls Logs) MarshalBinary() ([]byte, error) {
-	b := make([]byte, 0, logsLen(ls))
+var _ gob.GobDecoder = (*logs)(nil)
+var _ gob.GobEncoder = (*logs)(nil)
+
+func (ls logs) GobEncode() ([]byte, error) {
+	b := make([]byte, 0, logsSize(ls))
+
+	b = binary.LittleEndian.AppendUint64(b, uint64(len(ls)))
+
 	for _, l := range ls {
 		b = appendLog(b, l)
 	}
+
 	return b, nil
 }
 
-func (ls *Logs) UnmarshalBinary(b []byte) (err error) {
-	for len(b) > 0 {
-		var l types.Log
-		b, err = unmarshalLog(b, &l)
+func (ls *logs) GobDecode(b []byte) (err error) {
+	var n uint64
+	b, err = decodeUint64(b, &n)
+	if err != nil {
+		return
+	}
+
+	*ls = make(logs, n)
+	for i := range n {
+		b, err = unmarshalLog(b, &(*ls)[i])
 		if err != nil {
 			return
 		}
-		*ls = append(*ls, l)
 	}
 
 	return nil
 }
 
-func logsLen(ls Logs) int {
-	l := 0
-	for i := range ls {
-		l += (0 +
-			/* Address */ common.AddressLength +
-			/* Topics */ 8 + len(ls[i].Topics)*common.HashLength +
-			/* Data */ 8 + len(ls[i].Data) +
+func logsSize(ls logs) int {
+	s := 8 // Slice len
+	for _, l := range ls {
+		s += /* Address */ common.AddressLength +
+			/* Topics */ 8 + len(l.Topics)*common.HashLength +
+			/* Data */ 8 + len(l.Data) +
 			/* BlockNumber */ 8 +
 			/* TxHash */ common.HashLength +
 			/* TxIndex */ 8 +
 			/* BlockHash */ common.HashLength +
 			/* BlockTimestamp */ 8 +
-			/* Index */ 8)
+			/* Index */ 8
 	}
-	return l
+	return s
 }
 
 func appendLog(b []byte, l types.Log) []byte {

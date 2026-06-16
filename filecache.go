@@ -2,7 +2,7 @@ package ethindex
 
 import (
 	"compress/gzip"
-	"encoding"
+	"encoding/gob"
 	"errors"
 	"io"
 	"os"
@@ -25,7 +25,7 @@ func (fs *FileCache) Delete(name string) error {
 	return os.Remove(fs.filepath(name))
 }
 
-func (fs *FileCache) Load(name string, out encoding.BinaryUnmarshaler) (ok bool, err error) {
+func (fs *FileCache) Load(name string, out any) (ok bool, err error) {
 	f, err := os.Open(fs.filepath(name))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -45,31 +45,20 @@ func (fs *FileCache) Load(name string, out encoding.BinaryUnmarshaler) (ok bool,
 		_ = gr.Close()
 	}()
 
-	bytes, err := io.ReadAll(gr)
-	if err != nil {
-		return false, err
-	}
-
-	if err := out.UnmarshalBinary(bytes); err != nil {
+	if err := gob.NewDecoder(gr).Decode(out); err != nil {
 		return false, err
 	}
 
 	return true, nil
 }
 
-func (fs *FileCache) Save(name string, v encoding.BinaryMarshaler) error {
+func (fs *FileCache) Save(name string, v any) error {
 	return atomicWrite(fs.filepath(name), func(w io.Writer) error {
 		gw := gzip.NewWriter(w)
 		defer func() {
 			_ = gw.Close()
 		}()
 
-		bytes, err := v.MarshalBinary()
-		if err != nil {
-			return err
-		}
-
-		_, err = gw.Write(bytes)
-		return err
+		return gob.NewEncoder(gw).Encode(v)
 	})
 }
