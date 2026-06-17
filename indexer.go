@@ -2,15 +2,15 @@ package ethindex
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
-	"math/big"
 	"slices"
 
-	"github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/rpc"
+	"github.com/ethereum/go-ethereum/crypto"
 )
 
 type Indexer struct {
@@ -21,8 +21,8 @@ type Indexer struct {
 	checkpointInterval uint64
 	logger             *slog.Logger
 
-	http    RPCClient
-	ws      RPCClient
+	http    Caller
+	ws      Subscriber
 	cache   Cache
 	handler Handler
 
@@ -86,8 +86,7 @@ func (idx *Indexer) live(ctx context.Context) error {
 	idx.isLive = true
 
 	headCh := make(chan *types.Header, idx.newHeadsBuffer)
-
-	sub, err := idx.ws.SubscribeNewHead(ctx, headCh)
+	sub, err := idx.ws.Subscribe(ctx, "eth", headCh, "newHeads")
 	if err != nil {
 		return err
 	}
@@ -134,8 +133,16 @@ func (idx *Indexer) live(ctx context.Context) error {
 	}
 }
 
+func (idx *Indexer) finalizedHeader(ctx context.Context) (*types.Header, error) {
+	var final *types.Header
+	if err := idx.http.CallContext(ctx, &final, "eth_getBlockByNumber", "finalized", false); err != nil {
+		return nil, err
+	}
+	return final, nil
+}
+
 func (idx *Indexer) backfill(ctx context.Context) error {
-	final, err := idx.http.HeaderByNumber(ctx, big.NewInt(int64(rpc.FinalizedBlockNumber)))
+	final, err := idx.finalizedHeader(ctx)
 	if err != nil {
 		return err
 	}
@@ -150,7 +157,7 @@ func (idx *Indexer) backfill(ctx context.Context) error {
 		idx.logger.Info("starting backfill", "from", from, "to", to)
 
 		if err := idx.processRange(ctx, from, to); err != nil {
-			return err
+			return fmt.Errorf("backfill blocks %d-%d: %w", from, to, err)
 		}
 	} else {
 		idx.logger.Info("backfill skipped, already up to date with finalized block")
@@ -181,7 +188,7 @@ func (idx *Indexer) processRange(ctx context.Context, from, to uint64) error {
 
 		logs, err := idx.fetchLogs(ctx, start, end)
 		if err != nil {
-			return err
+			return fmt.Errorf("fetch logs for blocks %d-%d: %w", start, end, err)
 		}
 
 		if err := ctx.Err(); err != nil {
@@ -189,8 +196,8 @@ func (idx *Indexer) processRange(ctx context.Context, from, to uint64) error {
 		}
 
 		for i := range logs {
-			if err := idx.handler.Process(ctx, logs[i]); err != nil {
-				return err
+			if err := idx.handler.Process(ctx, logs[i].toGethLog()); err != nil {
+				return fmt.Errorf("process log at block %d index %d tx %s: %w", logs[i].BlockNumber, logs[i].Index, logs[i].TxHash, err)
 			}
 		}
 	}
@@ -198,23 +205,39 @@ func (idx *Indexer) processRange(ctx context.Context, from, to uint64) error {
 	return nil
 }
 
-func (idx *Indexer) fetchLogs(ctx context.Context, from, to uint64) ([]types.Log, error) {
+func buildFilterQuery(f Filter, from, to uint64) map[string]any {
+	arg := map[string]any{}
+	if len(f.Addresses) > 0 {
+		arg["address"] = f.Addresses
+	}
+	if f.Topics != nil {
+		arg["topics"] = f.Topics
+	}
+	arg["fromBlock"] = fmt.Sprintf("0x%x", from)
+	arg["toBlock"] = fmt.Sprintf("0x%x", to)
+	return arg
+}
+
+func (idx *Indexer) fetchLogs(ctx context.Context, from, to uint64) ([]log, error) {
 	filter := idx.handler.Filter()
 
-	query := ethereum.FilterQuery{
-		FromBlock: big.NewInt(int64(from)),
-		ToBlock:   big.NewInt(int64(to)),
-		Addresses: filter.Addresses,
-		Topics:    filter.Topics,
-	}
+	query := buildFilterQuery(filter, from, to)
 
 	if idx.isLive {
-		return idx.http.FilterLogs(ctx, query)
+		var logs []log
+		if err := idx.http.CallContext(ctx, &logs, "eth_getLogs", query); err != nil {
+			return nil, err
+		}
+		return logs, nil
 	}
 
-	key := filterQueryKey(query)
+	queryJSON, err := json.Marshal(query)
+	if err != nil {
+		return nil, err
+	}
+	key := hexutil.Encode(crypto.Keccak256(queryJSON))
 
-	var cached logs
+	var cached []log
 	ok, err := idx.cache.Load(key, &cached)
 	if err != nil {
 		return nil, err
@@ -223,15 +246,15 @@ func (idx *Indexer) fetchLogs(ctx context.Context, from, to uint64) ([]types.Log
 		return cached, nil
 	}
 
-	l, err := idx.http.FilterLogs(ctx, query)
-	if err != nil {
+	var logs []log
+	if err := idx.http.CallContext(ctx, &logs, "eth_getLogs", query); err != nil {
 		return nil, err
 	}
-	if err := idx.cache.Save(key, logs(l)); err != nil {
+	if err := idx.cache.Save(key, logs); err != nil {
 		return nil, err
 	}
 
-	return l, nil
+	return logs, nil
 }
 
 func (idx *Indexer) restore(ctx context.Context) error {
@@ -246,7 +269,7 @@ func (idx *Indexer) restore(ctx context.Context) error {
 	}
 
 	if err := idx.handler.Restore(ctx, cp.State); err != nil {
-		return err
+		return fmt.Errorf("restore checkpoint %d: %w", cp.Header.Number, err)
 	}
 
 	idx.head = &cp.Header
@@ -261,7 +284,7 @@ func (idx *Indexer) prune(ctx context.Context) error {
 
 	// 1. Find latest finalized checkpoint
 	{
-		final, err := idx.http.HeaderByNumber(ctx, big.NewInt(int64(rpc.FinalizedBlockNumber)))
+		final, err := idx.finalizedHeader(ctx)
 		if err != nil {
 			return err
 		}

@@ -16,10 +16,10 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/node"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/joho/godotenv"
+	"github.com/pkg/profile"
 
 	"github.com/letamanoir/ethindex"
 	"github.com/letamanoir/ethindex/examples/contracts"
@@ -137,16 +137,13 @@ func run() error {
 
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug})))
 
-	httpC := ethclient.NewClient(httpRPC)
-	wsC := ethclient.NewClient(wsRPC)
-
 	weth := NewWETH()
 
 	cache := ethindex.NewFileCache("./indexer_data")
 
 	idx := ethindex.New().
 		WithHandler(weth).
-		WithClients(httpC, wsC).
+		WithClients(httpRPC, wsRPC).
 		WithCache(cache).
 		WithMaxBlockRange(100_000).
 		Build()
@@ -162,6 +159,8 @@ func run() error {
 }
 
 func main() {
+	defer profile.Start(profile.CPUProfile, profile.ProfilePath(".")).Stop()
+
 	if err := run(); err != nil {
 		slog.Error("Indexer error", "error", err)
 		os.Exit(1)

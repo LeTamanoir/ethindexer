@@ -28,7 +28,7 @@ func (c ConfigureHandler) WithHandler(h Handler) ConfigureClients {
 }
 
 // WithClients sets the Ethereum RPC clients.
-func (c ConfigureClients) WithClients(http RPCClient, ws RPCClient) ConfigureCache {
+func (c ConfigureClients) WithClients(http Caller, ws Subscriber) ConfigureCache {
 	c.i.http = http
 	c.i.ws = ws
 	return ConfigureCache(c)

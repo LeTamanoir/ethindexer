@@ -3,4 +3,4 @@
 .cache/
 *.out
 *.test
-*.prof
+*.pprof

@@ -3,11 +3,10 @@ package ethindex
 import (
 	"context"
 	"errors"
-	"math/big"
 
-	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/rpc"
 )
 
 // ErrReorg is returned when a chain reorganization is detected during indexing.
@@ -61,9 +60,12 @@ type Cache interface {
 	Delete(name string) error
 }
 
-// RPCClient defines the methods the indexer requires from an Ethereum RPC client.
-type RPCClient interface {
-	HeaderByNumber(ctx context.Context, number *big.Int) (*types.Header, error)
-	FilterLogs(ctx context.Context, q ethereum.FilterQuery) ([]types.Log, error)
-	SubscribeNewHead(ctx context.Context, ch chan<- *types.Header) (ethereum.Subscription, error)
+// Caller performs RPC request-response calls.
+type Caller interface {
+	CallContext(ctx context.Context, result interface{}, method string, args ...interface{}) error
+}
+
+// Subscriber registers RPC subscriptions.
+type Subscriber interface {
+	Subscribe(ctx context.Context, namespace string, channel interface{}, args ...interface{}) (*rpc.ClientSubscription, error)
 }

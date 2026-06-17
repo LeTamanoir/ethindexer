@@ -5,6 +5,7 @@ import (
 	"encoding/gob"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 )
 
 type blockHeader struct {
@@ -34,7 +35,7 @@ func (c checkpoint) GobEncode() ([]byte, error) {
 }
 
 func (c *checkpoint) GobDecode(b []byte) (err error) {
-	b, err = decodeUint64(b, &c.Header.Number)
+	b, err = decodeUint64(b, (*hexutil.Uint64)(&c.Header.Number))
 	if err != nil {
 		return
 	}
