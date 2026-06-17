@@ -19,7 +19,7 @@ import (
 	"github.com/ethereum/go-ethereum/node"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/joho/godotenv"
-	"github.com/pkg/profile"
+	// "github.com/pkg/profile"
 
 	"github.com/letamanoir/ethindex"
 	"github.com/letamanoir/ethindex/examples/contracts"
@@ -159,7 +159,7 @@ func run() error {
 }
 
 func main() {
-	defer profile.Start(profile.CPUProfile, profile.ProfilePath(".")).Stop()
+	// defer profile.Start(profile.CPUProfile, profile.ProfilePath(".")).Stop()
 
 	if err := run(); err != nil {
 		slog.Error("Indexer error", "error", err)

@@ -18,7 +18,73 @@ var (
 	_ easyjson.Marshaler
 )
 
-func easyjsonB6915918DecodeGithubComLetamanoirEthindex(in *jlexer.Lexer, out *log) {
+func easyjsonB6915918DecodeGithubComLetamanoirEthindex(in *jlexer.Lexer, out *logs) {
+	isTopLevel := in.IsStart()
+	if in.IsNull() {
+		in.Skip()
+		*out = nil
+	} else {
+		in.Delim('[')
+		if *out == nil {
+			if !in.IsDelim(']') {
+				*out = make(logs, 0, 0)
+			} else {
+				*out = logs{}
+			}
+		} else {
+			*out = (*out)[:0]
+		}
+		for !in.IsDelim(']') {
+			var v1 log
+			easyjsonB6915918DecodeGithubComLetamanoirEthindex1(in, &v1)
+			*out = append(*out, v1)
+			in.WantComma()
+		}
+		in.Delim(']')
+	}
+	if isTopLevel {
+		in.Consumed()
+	}
+}
+func easyjsonB6915918EncodeGithubComLetamanoirEthindex(out *jwriter.Writer, in logs) {
+	if in == nil && (out.Flags&jwriter.NilSliceAsEmpty) == 0 {
+		out.RawString("null")
+	} else {
+		out.RawByte('[')
+		for v2, v3 := range in {
+			if v2 > 0 {
+				out.RawByte(',')
+			}
+			easyjsonB6915918EncodeGithubComLetamanoirEthindex1(out, v3)
+		}
+		out.RawByte(']')
+	}
+}
+
+// MarshalJSON supports json.Marshaler interface
+func (v logs) MarshalJSON() ([]byte, error) {
+	w := jwriter.Writer{}
+	easyjsonB6915918EncodeGithubComLetamanoirEthindex(&w, v)
+	return w.Buffer.BuildBytes(), w.Error
+}
+
+// MarshalEasyJSON supports easyjson.Marshaler interface
+func (v logs) MarshalEasyJSON(w *jwriter.Writer) {
+	easyjsonB6915918EncodeGithubComLetamanoirEthindex(w, v)
+}
+
+// UnmarshalJSON supports json.Unmarshaler interface
+func (v *logs) UnmarshalJSON(data []byte) error {
+	r := jlexer.Lexer{Data: data}
+	easyjsonB6915918DecodeGithubComLetamanoirEthindex(&r, v)
+	return r.Error()
+}
+
+// UnmarshalEasyJSON supports easyjson.Unmarshaler interface
+func (v *logs) UnmarshalEasyJSON(l *jlexer.Lexer) {
+	easyjsonB6915918DecodeGithubComLetamanoirEthindex(l, v)
+}
+func easyjsonB6915918DecodeGithubComLetamanoirEthindex1(in *jlexer.Lexer, out *log) {
 	isTopLevel := in.IsStart()
 	if in.IsNull() {
 		if isTopLevel {
@@ -56,15 +122,15 @@ func easyjsonB6915918DecodeGithubComLetamanoirEthindex(in *jlexer.Lexer, out *lo
 					out.Topics = (out.Topics)[:0]
 				}
 				for !in.IsDelim(']') {
-					var v1 common.Hash
+					var v4 common.Hash
 					if in.IsNull() {
 						in.Skip()
 					} else {
 						if data := in.Raw(); in.Ok() {
-							in.AddError((v1).UnmarshalJSON(data))
+							in.AddError((v4).UnmarshalJSON(data))
 						}
 					}
-					out.Topics = append(out.Topics, v1)
+					out.Topics = append(out.Topics, v4)
 					in.WantComma()
 				}
 				in.Delim(']')
@@ -135,7 +201,7 @@ func easyjsonB6915918DecodeGithubComLetamanoirEthindex(in *jlexer.Lexer, out *lo
 		in.Consumed()
 	}
 }
-func easyjsonB6915918EncodeGithubComLetamanoirEthindex(out *jwriter.Writer, in log) {
+func easyjsonB6915918EncodeGithubComLetamanoirEthindex1(out *jwriter.Writer, in log) {
 	out.RawByte('{')
 	first := true
 	_ = first
@@ -151,11 +217,11 @@ func easyjsonB6915918EncodeGithubComLetamanoirEthindex(out *jwriter.Writer, in l
 			out.RawString("null")
 		} else {
 			out.RawByte('[')
-			for v2, v3 := range in.Topics {
-				if v2 > 0 {
+			for v5, v6 := range in.Topics {
+				if v5 > 0 {
 					out.RawByte(',')
 				}
-				out.RawText((v3).MarshalText())
+				out.RawText((v6).MarshalText())
 			}
 			out.RawByte(']')
 		}
@@ -196,28 +262,4 @@ func easyjsonB6915918EncodeGithubComLetamanoirEthindex(out *jwriter.Writer, in l
 		out.RawText((in.Index).MarshalText())
 	}
 	out.RawByte('}')
-}
-
-// MarshalJSON supports json.Marshaler interface
-func (v log) MarshalJSON() ([]byte, error) {
-	w := jwriter.Writer{}
-	easyjsonB6915918EncodeGithubComLetamanoirEthindex(&w, v)
-	return w.Buffer.BuildBytes(), w.Error
-}
-
-// MarshalEasyJSON supports easyjson.Marshaler interface
-func (v log) MarshalEasyJSON(w *jwriter.Writer) {
-	easyjsonB6915918EncodeGithubComLetamanoirEthindex(w, v)
-}
-
-// UnmarshalJSON supports json.Unmarshaler interface
-func (v *log) UnmarshalJSON(data []byte) error {
-	r := jlexer.Lexer{Data: data}
-	easyjsonB6915918DecodeGithubComLetamanoirEthindex(&r, v)
-	return r.Error()
-}
-
-// UnmarshalEasyJSON supports easyjson.Unmarshaler interface
-func (v *log) UnmarshalEasyJSON(l *jlexer.Lexer) {
-	easyjsonB6915918DecodeGithubComLetamanoirEthindex(l, v)
 }

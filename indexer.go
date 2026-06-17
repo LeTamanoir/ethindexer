@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -157,7 +158,7 @@ func (idx *Indexer) backfill(ctx context.Context) error {
 		idx.logger.Info("starting backfill", "from", from, "to", to)
 
 		if err := idx.processRange(ctx, from, to); err != nil {
-			return fmt.Errorf("backfill blocks %d-%d: %w", from, to, err)
+			return err
 		}
 	} else {
 		idx.logger.Info("backfill skipped, already up to date with finalized block")
@@ -181,31 +182,42 @@ func (idx *Indexer) processRange(ctx context.Context, from, to uint64) error {
 	for start := from; start <= to; start += idx.maxBlockRange {
 		end := min(start+idx.maxBlockRange-1, to)
 
-		processed := end - from + 1
-		progress := float64(processed) / float64(totalBlocks) * 100.0
-
-		idx.logger.Debug("processing chunk", "progress", fmt.Sprintf("%.2f%%", progress), "from", start, "to", end)
-
+		fetchStart := time.Now()
 		logs, err := idx.fetchLogs(ctx, start, end)
 		if err != nil {
 			return fmt.Errorf("fetch logs for blocks %d-%d: %w", start, end, err)
 		}
+		fetchDur := time.Since(fetchStart)
 
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 
+		processStart := time.Now()
 		for i := range logs {
 			if err := idx.handler.Process(ctx, logs[i].toGethLog()); err != nil {
 				return fmt.Errorf("process log at block %d index %d tx %s: %w", logs[i].BlockNumber, logs[i].Index, logs[i].TxHash, err)
 			}
 		}
+		processDur := time.Since(processStart)
+
+		processed := end - from + 1
+		progress := float64(processed) / float64(totalBlocks) * 100.0
+
+		idx.logger.Debug("processed chunk",
+			"progress", fmt.Sprintf("%.2f%%", progress),
+			"from", start,
+			"to", end,
+			"fetch_dur", fetchDur,
+			"process_dur", processDur,
+		)
 	}
 
 	return nil
 }
 
-func buildFilterQuery(f Filter, from, to uint64) map[string]any {
+func (idx *Indexer) filterQuery(from, to uint64) map[string]any {
+	f := idx.handler.Filter()
 	arg := map[string]any{}
 	if len(f.Addresses) > 0 {
 		arg["address"] = f.Addresses
@@ -218,26 +230,29 @@ func buildFilterQuery(f Filter, from, to uint64) map[string]any {
 	return arg
 }
 
-func (idx *Indexer) fetchLogs(ctx context.Context, from, to uint64) ([]log, error) {
-	filter := idx.handler.Filter()
+func (idx *Indexer) fastGetLogs(ctx context.Context, from, to uint64) (logs, error) {
+	query := idx.filterQuery(from, to)
 
-	query := buildFilterQuery(filter, from, to)
-
-	if idx.isLive {
-		var logs []log
-		if err := idx.http.CallContext(ctx, &logs, "eth_getLogs", query); err != nil {
-			return nil, err
-		}
-		return logs, nil
+	var logs logs
+	if err := idx.http.CallContext(ctx, &logs, "eth_getLogs", query); err != nil {
+		return nil, err
 	}
 
-	queryJSON, err := json.Marshal(query)
+	return logs, nil
+}
+
+func (idx *Indexer) fetchLogs(ctx context.Context, from, to uint64) (logs, error) {
+	if idx.isLive {
+		return idx.fastGetLogs(ctx, from, to)
+	}
+
+	q, err := json.Marshal(idx.filterQuery(from, to))
 	if err != nil {
 		return nil, err
 	}
-	key := hexutil.Encode(crypto.Keccak256(queryJSON))
+	key := hexutil.Encode(crypto.Keccak256(q))
 
-	var cached []log
+	var cached logs
 	ok, err := idx.cache.Load(key, &cached)
 	if err != nil {
 		return nil, err
@@ -246,8 +261,8 @@ func (idx *Indexer) fetchLogs(ctx context.Context, from, to uint64) ([]log, erro
 		return cached, nil
 	}
 
-	var logs []log
-	if err := idx.http.CallContext(ctx, &logs, "eth_getLogs", query); err != nil {
+	logs, err := idx.fastGetLogs(ctx, from, to)
+	if err != nil {
 		return nil, err
 	}
 	if err := idx.cache.Save(key, logs); err != nil {
