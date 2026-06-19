@@ -145,7 +145,6 @@ func run() error {
 		WithHandler(weth).
 		WithClients(httpRPC, wsRPC).
 		WithCache(cache).
-		WithMaxBlockRange(100_000).
 		Build()
 
 	go func() {

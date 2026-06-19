@@ -7,12 +7,57 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"sync"
 	"time"
 
+	"github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 )
+
+// ErrReorg is returned when a chain reorganization is detected during indexing.
+var ErrReorg = errors.New("chain reorg detected")
+
+// Filter defines the criteria used to select Ethereum logs during indexing.
+type Filter struct {
+	// FromBlock specifies the starting block number for the backfill phase.
+	FromBlock uint64
+
+	// Addresses restricts log collection to the given contract addresses.
+	Addresses []common.Address
+
+	// Topics filters logs by their indexed event topics.
+	Topics [][]common.Hash
+}
+
+type Handler interface {
+	Snapshot(context.Context) ([]byte, error)
+	Restore(context.Context, []byte) error
+	Filter() Filter
+	Process(context.Context, []types.Log) error
+}
+
+type LogStore interface {
+	Load(ethereum.FilterQuery) ([]types.Log, error)
+	Save(ethereum.FilterQuery, []types.Log) error
+}
+
+type Client interface {
+	FilterLogs(ctx context.Context, q ethereum.FilterQuery) ([]types.Log, error)
+	HeaderByHash(ctx context.Context, hash common.Hash) (*types.Header, error)
+}
+
+type LiveClient interface {
+	SubscribeNewHead(ctx context.Context, ch chan<- *types.Header) (ethereum.Subscription, error)
+}
+
+type checkpoint struct {
+	BlockNumber uint64
+	BlockHash   common.Hash
+	State       []byte
+}
 
 type Indexer struct {
 	retryFunc          func(err error, attempt int) bool
@@ -22,16 +67,15 @@ type Indexer struct {
 	checkpointInterval uint64
 	logger             *slog.Logger
 
-	http    Caller
-	ws      Subscriber
-	cache   Cache
+	httpC Client
+	wsC   LiveClient
+
 	handler Handler
 
-	head        *blockHeader
-	isLive      bool
-	checkpoints []blockHeader
+	head *types.Header
 
-	stopCh chan struct{}
+	stopCh   chan struct{}
+	stopOnce sync.Once
 }
 
 // Run starts the indexer and blocks until the context is canceled.
@@ -62,13 +106,10 @@ func (idx *Indexer) Run(ctx context.Context) error {
 
 // Stop gracefully shuts down the indexer.
 func (idx *Indexer) Stop() {
-	close(idx.stopCh)
+	idx.stopOnce.Do(func() { close(idx.stopCh) })
 }
 
 func (idx *Indexer) run(ctx context.Context) error {
-	idx.isLive = false
-	idx.checkpoints = nil
-
 	idx.logger.Info("starting indexer")
 
 	if err := idx.restore(ctx); err != nil {
