@@ -2,34 +2,27 @@ package ethindex
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/big"
 	"slices"
 	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/rpc"
+	"golang.org/x/sync/errgroup"
 )
 
-// ErrReorg is returned when a chain reorganization is detected during indexing.
 var ErrReorg = errors.New("chain reorg detected")
 
-// Filter defines the criteria used to select Ethereum logs during indexing.
 type Filter struct {
-	// FromBlock specifies the starting block number for the backfill phase.
 	FromBlock uint64
-
-	// Addresses restricts log collection to the given contract addresses.
 	Addresses []common.Address
-
-	// Topics filters logs by their indexed event topics.
-	Topics [][]common.Hash
+	Topics    [][]common.Hash
 }
 
 type Handler interface {
@@ -39,40 +32,64 @@ type Handler interface {
 	Process(context.Context, []types.Log) error
 }
 
-type LogStore interface {
-	Load(ethereum.FilterQuery) ([]types.Log, error)
-	Save(ethereum.FilterQuery, []types.Log) error
-}
-
-type Client interface {
-	FilterLogs(ctx context.Context, q ethereum.FilterQuery) ([]types.Log, error)
-	HeaderByHash(ctx context.Context, hash common.Hash) (*types.Header, error)
-}
-
-type LiveClient interface {
-	SubscribeNewHead(ctx context.Context, ch chan<- *types.Header) (ethereum.Subscription, error)
-}
-
 type checkpoint struct {
 	BlockNumber uint64
 	BlockHash   common.Hash
 	State       []byte
 }
 
-type Indexer struct {
+type CheckpointStore interface {
+	Load(common.Hash) (*checkpoint, error)
+	Save(common.Hash, *checkpoint) error
+	Delete(common.Hash) error
+}
+
+type LogStore interface {
+	Load(ethereum.FilterQuery) ([]types.Log, error)
+	Save(ethereum.FilterQuery, []types.Log) error
+}
+
+type Client interface {
+	ethereum.LogFilterer
+	ethereum.ChainReader
+}
+
+type blockHeader struct {
+	Number uint64      `json:"number"`
+	Hash   common.Hash `json:"hash"`
+}
+
+type indexerConfig struct {
 	retryFunc          func(err error, attempt int) bool
 	newHeadsBuffer     int
 	maxConcurrentCalls int
 	maxBlockRange      uint64
 	checkpointInterval uint64
-	logger             *slog.Logger
+}
+
+type indexerState struct {
+	Finalized *blockHeader `json:"finalized"`
+	Dangling  *blockHeader `json:"dangling"`
+}
+
+type Indexer struct {
+	cfg    *indexerConfig
+	logger *slog.Logger
 
 	httpC Client
 	wsC   LiveClient
 
-	handler Handler
+	hMu sync.RWMutex
+	h   Handler
 
-	head *types.Header
+	// cm checkpointManager
+	cs CheckpointStore
+	ls LogStore
+
+	state *indexerState
+
+	head   *blockHeader
+	isLive bool
 
 	stopCh   chan struct{}
 	stopOnce sync.Once
@@ -94,7 +111,7 @@ func (idx *Indexer) Run(ctx context.Context) error {
 			continue
 		}
 
-		retryable := idx.retryFunc != nil && idx.retryFunc(err, attempt)
+		retryable := idx.cfg.retryFunc != nil && idx.cfg.retryFunc(err, attempt)
 
 		idx.logger.Error("runtime error", "err", err, "retryable", retryable)
 
@@ -125,10 +142,8 @@ func (idx *Indexer) run(ctx context.Context) error {
 }
 
 func (idx *Indexer) live(ctx context.Context) error {
-	idx.isLive = true
-
-	headCh := make(chan *types.Header, idx.newHeadsBuffer)
-	sub, err := idx.ws.Subscribe(ctx, "eth", headCh, "newHeads")
+	ch := make(chan *types.Header, idx.cfg.newHeadsBuffer)
+	sub, err := idx.wsC.SubscribeNewHead(ctx, ch)
 	if err != nil {
 		return err
 	}
@@ -138,60 +153,60 @@ func (idx *Indexer) live(ctx context.Context) error {
 
 	for {
 		select {
-		case h := <-headCh:
-			num := h.Number.Uint64()
-			hash := h.Hash()
-
-			// Only check for reorgs when appending the strictly sequential next block.
-			// This safely bypasses the check during the brief transition from the
-			// backfilled state to the live network head.
-			if idx.head.Number == num-1 && idx.head.Hash != h.ParentHash {
-				idx.logger.Warn("reorg detected", "old", idx.head.Number, "new", num)
-
-				return ErrReorg
-			}
-
-			if err := idx.processRange(ctx, idx.head.Number+1, num); err != nil {
-				return err
-			}
-
-			idx.head = &blockHeader{Number: num, Hash: hash}
-
-			if num%idx.checkpointInterval == 0 {
-				if err := idx.checkpoint(ctx); err != nil {
-					return err
-				}
-				if err := idx.prune(ctx); err != nil {
-					return err
-				}
-			}
-
+		case <-ctx.Done():
+			return ctx.Err()
 		case err := <-sub.Err():
 			return err
-
 		case <-idx.stopCh:
 			return nil
+		case h := <-ch:
+			if err := idx.processHead(ctx, h); err != nil {
+				return err
+			}
 		}
 	}
 }
 
-func (idx *Indexer) finalizedHeader(ctx context.Context) (*types.Header, error) {
-	var final *types.Header
-	if err := idx.http.CallContext(ctx, &final, "eth_getBlockByNumber", "finalized", false); err != nil {
-		return nil, err
+func (idx *Indexer) processHead(ctx context.Context, h *types.Header) error {
+	ch := idx.head
+
+	// Only check for reorgs when appending the strictly sequential next block.
+	// This safely bypasses the check during the brief transition from the
+	// backfilled state to the live network head.
+	if ch.Number.Uint64() == h.Number.Uint64()-1 &&
+		ch.Hash() != h.ParentHash {
+		idx.logger.Warn("reorg detected", "old", ch.Number, "new", h.Number)
+
+		return ErrReorg
 	}
-	return final, nil
+
+	if err := idx.processRange(ctx, ch.Number.Uint64()+1, h.Number.Uint64()); err != nil {
+		return err
+	}
+
+	idx.head = h
+
+	// if num%idx.cfg.checkpointInterval == 0 {
+	// 	if err := idx.checkpoint(ctx); err != nil {
+	// 		return err
+	// 	}
+	// 	if err := idx.prune(ctx); err != nil {
+	// 		return err
+	// 	}
+	// }
+
+	return nil
 }
 
 func (idx *Indexer) backfill(ctx context.Context) error {
-	final, err := idx.finalizedHeader(ctx)
+	final, err := idx.httpC.HeaderByNumber(ctx, big.NewInt(int64(rpc.FinalizedBlockNumber)))
 	if err != nil {
 		return err
 	}
 
-	from := idx.handler.Filter().FromBlock
+	from := idx.h.Filter().FromBlock
 	if idx.head != nil {
-		from = idx.head.Number + 1
+		from = idx.head.Number.Uint64() + 1
 	}
 	to := final.Number.Uint64()
 
@@ -205,10 +220,7 @@ func (idx *Indexer) backfill(ctx context.Context) error {
 		idx.logger.Info("backfill skipped, already up to date with finalized block")
 	}
 
-	idx.head = &blockHeader{
-		Number: to,
-		Hash:   final.Hash(),
-	}
+	idx.head = final
 
 	return nil
 }
@@ -220,8 +232,8 @@ func (idx *Indexer) processRange(ctx context.Context, from, to uint64) error {
 
 	totalBlocks := to - from + 1
 
-	for start := from; start <= to; start += idx.maxBlockRange {
-		end := min(start+idx.maxBlockRange-1, to)
+	for start := from; start <= to; start += idx.cfg.maxBlockRange {
+		end := min(start+idx.cfg.maxBlockRange-1, to)
 
 		fetchStart := time.Now()
 		logs, err := idx.fetchLogs(ctx, start, end)
@@ -235,7 +247,7 @@ func (idx *Indexer) processRange(ctx context.Context, from, to uint64) error {
 		}
 
 		processStart := time.Now()
-		if err := idx.handler.Process(ctx, logs); err != nil {
+		if err := idx.h.Process(ctx, logs); err != nil {
 			return err
 		}
 		processDur := time.Since(processStart)
@@ -255,56 +267,36 @@ func (idx *Indexer) processRange(ctx context.Context, from, to uint64) error {
 	return nil
 }
 
-func (idx *Indexer) filterQuery(from, to uint64) map[string]any {
-	f := idx.handler.Filter()
-	arg := map[string]any{}
-	if len(f.Addresses) > 0 {
-		arg["address"] = f.Addresses
+func (idx *Indexer) filterQuery(from, to uint64) ethereum.FilterQuery {
+	f := idx.h.Filter()
+	return ethereum.FilterQuery{
+		FromBlock: new(big.Int).SetUint64(from),
+		ToBlock:   new(big.Int).SetUint64(to),
+		Addresses: f.Addresses,
+		Topics:    f.Topics,
 	}
-	if f.Topics != nil {
-		arg["topics"] = f.Topics
-	}
-	arg["fromBlock"] = fmt.Sprintf("0x%x", from)
-	arg["toBlock"] = fmt.Sprintf("0x%x", to)
-	return arg
-}
-
-func (idx *Indexer) fastGetLogs(ctx context.Context, from, to uint64) ([]types.Log, error) {
-	query := idx.filterQuery(from, to)
-
-	var logs []types.Log
-	if err := idx.http.CallContext(ctx, &logs, "eth_getLogs", query); err != nil {
-		return nil, err
-	}
-
-	return logs, nil
 }
 
 func (idx *Indexer) fetchLogs(ctx context.Context, from, to uint64) ([]types.Log, error) {
+	q := idx.filterQuery(from, to)
+
 	if idx.isLive {
-		return idx.fastGetLogs(ctx, from, to)
+		return idx.httpC.FilterLogs(ctx, q)
 	}
 
-	q, err := json.Marshal(idx.filterQuery(from, to))
+	cached, err := idx.ls.Load(q)
 	if err != nil {
 		return nil, err
 	}
-	key := hexutil.Encode(crypto.Keccak256(q))
-
-	var cached []types.Log
-	ok, err := idx.cache.Load(key, &cached)
-	if err != nil {
-		return nil, err
-	}
-	if ok {
+	if len(cached) > 0 {
 		return cached, nil
 	}
 
-	logs, err := idx.fastGetLogs(ctx, from, to)
+	logs, err := idx.httpC.FilterLogs(ctx, q)
 	if err != nil {
 		return nil, err
 	}
-	if err := idx.cache.Save(key, logs); err != nil {
+	if err := idx.ls.Save(q, logs); err != nil {
 		return nil, err
 	}
 
@@ -312,29 +304,67 @@ func (idx *Indexer) fetchLogs(ctx context.Context, from, to uint64) ([]types.Log
 }
 
 func (idx *Indexer) restore(ctx context.Context) error {
-	var cp checkpoint
-	ok, err := idx.cache.Load(finalizedCheckpointKey(), &cp)
+	cp, err := idx.cs.Load(idx.state.Finalized.Hash)
 	if err != nil {
 		return err
 	}
-	if !ok {
+	if cp == nil {
 		idx.logger.Info("no checkpoint to restore")
 		return nil
 	}
 
-	if err := idx.handler.Restore(ctx, cp.State); err != nil {
-		return fmt.Errorf("restore checkpoint %d: %w", cp.Header.Number, err)
+	if err := idx.h.Restore(ctx, cp.State); err != nil {
+		return fmt.Errorf("restore checkpoint %s: %w", cp.Header.Hash, err)
 	}
 
-	idx.head = &cp.Header
+	idx.head = cp.Header
 
-	idx.logger.Info("restored checkpoint", "block", cp.Header.Number, "hash", cp.Header.Hash)
+	idx.logger.Info("Restored checkpoint",
+		"number", cp.Header.Number,
+		"hash", cp.Header.Hash)
 
 	return nil
 }
 
-func (idx *Indexer) prune(ctx context.Context) error {
-	var finalHeader blockHeader
+func (idx *Indexer) promote(ctx context.Context) error {
+	var dangling, finalized *types.Header
+
+	var eg errgroup.Group
+
+	eg.Go(func() (err error) {
+		dangling, err = idx.httpC.HeaderByNumber(ctx, idx.state.Dangling.Number)
+		return
+	})
+	eg.Go(func() (err error) {
+		finalized, err = idx.httpC.HeaderByNumber(ctx, big.NewInt(int64(rpc.FinalizedBlockNumber)))
+		return
+	})
+
+	if err := eg.Wait(); err != nil {
+		return err
+	}
+
+	// Make sure dangling hash matches the node
+	// otherwise it means there was a reorg,
+	// so we discard the dangling checkpoint
+	if idx.dangling.Hash() != dangling.Hash() {
+		if err := idx.cs.Delete(idx.dangling.Hash()); err != nil {
+			return err
+		}
+
+		idx.dangling = nil
+
+		return nil
+	}
+
+	// If dangling is older than finalized, we promote
+	if dangling.Number.Cmp(finalized.Number) > 0 {
+		return nil
+	}
+
+	idx.finalized = idx.dangling
+
+	// if dangling.Nonce
 
 	// 1. Find latest finalized checkpoint
 	{
@@ -401,23 +431,25 @@ func (idx *Indexer) prune(ctx context.Context) error {
 }
 
 func (idx *Indexer) checkpoint(ctx context.Context) error {
-	state, err := idx.handler.Snapshot(ctx)
+	idx.hMu.RLock()
+	state, err := idx.h.Snapshot(ctx)
+	idx.hMu.RUnlock()
 	if err != nil {
 		return err
 	}
 
-	cp := checkpoint{
-		Header: *idx.head,
-		State:  state,
-	}
+	cp := checkpoint{Header: idx.head, State: state}
+	h := cp.Header.Hash()
 
-	if err := idx.cache.Save(checkpointKey(cp.Header), cp); err != nil {
+	if err := idx.cs.Save(h, cp); err != nil {
 		return err
 	}
 
-	idx.checkpoints = append(idx.checkpoints, cp.Header)
+	idx.dangling = h
 
-	idx.logger.Info("saved checkpoint", "block", cp.Header.Number, "hash", cp.Header.Hash)
+	idx.logger.Info("Saved dangling checkpoint",
+		"number", cp.Header.Number,
+		"hash", cp.Header.Hash)
 
 	return nil
 }
