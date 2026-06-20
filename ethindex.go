@@ -17,20 +17,7 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-var ErrReorg = errors.New("chain reorg detected")
-
-type Filter struct {
-	FromBlock uint64
-	Addresses []common.Address
-	Topics    [][]common.Hash
-}
-
-type Handler interface {
-	Snapshot(context.Context) ([]byte, error)
-	Restore(context.Context, []byte) error
-	Filter() Filter
-	Process(context.Context, []types.Log) error
-}
+var errReorg = errors.New("chain reorged")
 
 type checkpoint struct {
 	BlockNumber uint64
@@ -38,86 +25,101 @@ type checkpoint struct {
 	State       []byte
 }
 
-type CheckpointStore interface {
-	Load(common.Hash) (*checkpoint, error)
-	Save(common.Hash, *checkpoint) error
-	Delete(common.Hash) error
-}
-
-type LogStore interface {
-	Load(ethereum.FilterQuery) ([]types.Log, error)
-	Save(ethereum.FilterQuery, []types.Log) error
-}
-
-type Client interface {
-	ethereum.LogFilterer
-	ethereum.ChainReader
-}
-
 type blockHeader struct {
 	Number uint64      `json:"number"`
 	Hash   common.Hash `json:"hash"`
 }
 
-type indexerConfig struct {
-	retryFunc          func(err error, attempt int) bool
-	newHeadsBuffer     int
-	maxConcurrentCalls int
-	maxBlockRange      uint64
-	checkpointInterval uint64
-}
-
-type indexerState struct {
-	Finalized *blockHeader `json:"finalized"`
-	Dangling  *blockHeader `json:"dangling"`
-}
-
 type Indexer struct {
-	cfg    *indexerConfig
-	logger *slog.Logger
+	// Configs
+	newHeadsBuffer int
+	maxBlockRange  int
+	finalityDepth  int
+	maxBackoff     time.Duration
+	retryFunc      func(err error, attempt int) bool
 
-	httpC Client
-	wsC   LiveClient
+	l *slog.Logger
+	c Client
+	h Handler
+	s Store
 
-	hMu sync.RWMutex
-	h   Handler
-
-	// cm checkpointManager
-	cs CheckpointStore
-	ls LogStore
-
-	state *indexerState
-
-	head   *blockHeader
-	isLive bool
+	// State
+	finalized *blockHeader
+	dangling  *blockHeader
+	head      *blockHeader
+	isLive    bool
 
 	stopCh   chan struct{}
 	stopOnce sync.Once
 }
 
-// Run starts the indexer and blocks until the context is canceled.
-// It automatically retries transient errors via the configured RetryFunc,
-// returning only on a fatal error, context cancellation, or a call to Stop.
-func (idx *Indexer) Run(ctx context.Context) error {
-	for attempt := 1; ; attempt++ {
-		err := idx.run(ctx)
+// New creates a new indexer instance
+func New(c Client, h Handler, s Store, cfg Config) *Indexer {
+	if cfg.FinalityDepth == 0 {
+		cfg.FinalityDepth = 64
+	}
+	if cfg.NewHeadsBuffer == 0 {
+		cfg.NewHeadsBuffer = 128
+	}
+	if cfg.MaxBlockRange == 0 {
+		cfg.MaxBlockRange = 10_000
+	}
+	if cfg.MaxBackoff == 0 {
+		cfg.MaxBackoff = 2 * time.Second
+	}
+	if cfg.RetryFunc == nil {
+		cfg.RetryFunc = func(err error, attempt int) bool { return false }
+	}
+	if cfg.Logger == nil {
+		cfg.Logger = slog.Default()
+	}
+	return &Indexer{
+		newHeadsBuffer: cfg.NewHeadsBuffer,
+		maxBlockRange:  cfg.MaxBlockRange,
+		finalityDepth:  cfg.FinalityDepth,
+		maxBackoff:     cfg.MaxBackoff,
+		retryFunc:      cfg.RetryFunc,
 
-		// if coming from [Indexer.Stop]
+		l: cfg.Logger,
+		c: c,
+		h: h,
+		s: s,
+
+		stopCh: make(chan struct{}),
+	}
+}
+
+// Run starts the indexer
+func (idx *Indexer) Run(ctx context.Context) error {
+	waitTime := idx.maxBackoff / 10
+	attempt := 0
+
+	for {
+		start := time.Now()
+
+		err := idx.run(ctx)
 		if err == nil {
 			return nil
 		}
-		// Retry on reorgs
-		if errors.Is(err, ErrReorg) {
+		if errors.Is(err, errReorg) {
 			continue
 		}
-
-		retryable := idx.cfg.retryFunc != nil && idx.cfg.retryFunc(err, attempt)
-
-		idx.logger.Error("runtime error", "err", err, "retryable", retryable)
-
-		if !retryable {
+		if !idx.retryFunc(err, attempt) {
 			return err
 		}
+
+		if time.Since(start) > idx.maxBackoff {
+			waitTime = idx.maxBackoff / 10
+		} else {
+			waitTime = min(waitTime*2, idx.maxBackoff)
+		}
+
+		idx.l.Error("Indexer error",
+			"error", err,
+			"attempt", attempt,
+			"retrying_in", waitTime)
+
+		attempt++
 	}
 }
 
@@ -127,7 +129,7 @@ func (idx *Indexer) Stop() {
 }
 
 func (idx *Indexer) run(ctx context.Context) error {
-	idx.logger.Info("starting indexer")
+	idx.l.Info("starting indexer")
 
 	if err := idx.restore(ctx); err != nil {
 		return err
@@ -142,14 +144,14 @@ func (idx *Indexer) run(ctx context.Context) error {
 }
 
 func (idx *Indexer) live(ctx context.Context) error {
-	ch := make(chan *types.Header, idx.cfg.newHeadsBuffer)
-	sub, err := idx.wsC.SubscribeNewHead(ctx, ch)
+	ch := make(chan *types.Header, idx.newHeadsBuffer)
+	sub, err := idx.c.SubscribeNewHead(ctx, ch)
 	if err != nil {
 		return err
 	}
 	defer sub.Unsubscribe()
 
-	idx.logger.Info("subscribed to new heads")
+	idx.l.Info("subscribed to new heads")
 
 	for {
 		select {

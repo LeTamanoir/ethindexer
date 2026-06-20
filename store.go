@@ -9,12 +9,6 @@ import (
 	"path/filepath"
 )
 
-type Store interface {
-	Load(key string) ([]byte, error)
-	Save(key string, data []byte) error
-	Delete(key string) error
-}
-
 // FileStore implements Store using gzip-compressed files in a directory.
 type FileStore struct {
 	dir string
