@@ -30,10 +30,10 @@ type Client interface {
 
 type Config struct {
 	NewHeadsBuffer int
-	MaxBlockRange  int
+	MaxBlockRange  uint64
 	FinalityDepth  int
 	MaxBackoff     time.Duration
-	RetryFunc      func(err error, attempt int) bool
+	Retry          func(err error, attempt int) bool
 	Logger         *slog.Logger
 }
 

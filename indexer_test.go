@@ -200,7 +200,7 @@ func TestIndexer_Restore(t *testing.T) {
 
 	cache := newMockCache()
 	cache.Save(finalizedCheckpointKey(), checkpoint{
-		Header: blockHeader{Number: 50, Hash: common.HexToHash("0x123")},
+		Header: blockRef{Number: 50, Hash: common.HexToHash("0x123")},
 		State:  []byte("restored_state"),
 	})
 
@@ -298,12 +298,12 @@ func TestIndexer_CheckpointPrune(t *testing.T) {
 	// Block 12 and 13 checkpoints should still be in cache.
 
 	var cp checkpoint
-	ok, _ := cache.Load(checkpointKey(blockHeader{Number: 13, Hash: h13.Hash()}), &cp)
+	ok, _ := cache.Load(checkpointKey(blockRef{Number: 13, Hash: h13.Hash()}), &cp)
 	if ok {
 		t.Errorf("expected checkpoint 13 to be pruned")
 	}
 
-	ok, _ = cache.Load(checkpointKey(blockHeader{Number: 11, Hash: h11.Hash()}), &cp)
+	ok, _ = cache.Load(checkpointKey(blockRef{Number: 11, Hash: h11.Hash()}), &cp)
 	if ok {
 		t.Errorf("expected checkpoint 11 to be pruned")
 	}

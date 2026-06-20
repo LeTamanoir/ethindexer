@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"math/big"
-	"slices"
 	"sync"
 	"time"
 
@@ -14,43 +13,42 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/rpc"
-	"golang.org/x/sync/errgroup"
 )
 
 var errReorg = errors.New("chain reorged")
 
-type checkpoint struct {
-	BlockNumber uint64
-	BlockHash   common.Hash
-	State       []byte
-}
+const (
+	finalizedCP = "checkpoint-finalized"
+	danglingCP  = "checkpoint-dangling"
+)
 
-type blockHeader struct {
-	Number uint64      `json:"number"`
-	Hash   common.Hash `json:"hash"`
+type BlockRef struct {
+	Number uint64
+	Hash   common.Hash
 }
 
 type Indexer struct {
 	// Configs
 	newHeadsBuffer int
-	maxBlockRange  int
+	maxBlockRange  uint64
 	finalityDepth  int
 	maxBackoff     time.Duration
 	retryFunc      func(err error, attempt int) bool
 
-	l *slog.Logger
 	c Client
+	l *slog.Logger
 	h Handler
 	s Store
 
 	// State
-	finalized *blockHeader
-	dangling  *blockHeader
-	head      *blockHeader
-	isLive    bool
+	mu       sync.RWMutex
+	dangling *BlockRef
+	head     *BlockRef
+	isLive   bool
 
-	stopCh   chan struct{}
-	stopOnce sync.Once
+	// Chans
+	subs map[chan BlockRef]struct{}
+	stop chan struct{}
 }
 
 // New creates a new indexer instance
@@ -67,8 +65,8 @@ func New(c Client, h Handler, s Store, cfg Config) *Indexer {
 	if cfg.MaxBackoff == 0 {
 		cfg.MaxBackoff = 2 * time.Second
 	}
-	if cfg.RetryFunc == nil {
-		cfg.RetryFunc = func(err error, attempt int) bool { return false }
+	if cfg.Retry == nil {
+		cfg.Retry = func(err error, attempt int) bool { return false }
 	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
@@ -78,14 +76,14 @@ func New(c Client, h Handler, s Store, cfg Config) *Indexer {
 		maxBlockRange:  cfg.MaxBlockRange,
 		finalityDepth:  cfg.FinalityDepth,
 		maxBackoff:     cfg.MaxBackoff,
-		retryFunc:      cfg.RetryFunc,
+		retryFunc:      cfg.Retry,
 
 		l: cfg.Logger,
 		c: c,
 		h: h,
 		s: s,
 
-		stopCh: make(chan struct{}),
+		stop: make(chan struct{}),
 	}
 }
 
@@ -117,20 +115,24 @@ func (idx *Indexer) Run(ctx context.Context) error {
 		idx.l.Error("Indexer error",
 			"error", err,
 			"attempt", attempt,
-			"retrying_in", waitTime)
+			"retrying-in", waitTime)
 
 		attempt++
 	}
 }
 
+func (idx *Indexer) Subscribe() (ch chan BlockRef, unsub func()) {
+	ch = make(chan BlockRef)
+	idx.subs[ch] = struct{}{}
+	return ch, func() { close(ch); delete(idx.subs, ch) }
+}
+
 // Stop gracefully shuts down the indexer.
 func (idx *Indexer) Stop() {
-	idx.stopOnce.Do(func() { close(idx.stopCh) })
+	close(idx.stop)
 }
 
 func (idx *Indexer) run(ctx context.Context) error {
-	idx.l.Info("starting indexer")
-
 	if err := idx.restore(ctx); err != nil {
 		return err
 	}
@@ -140,7 +142,6 @@ func (idx *Indexer) run(ctx context.Context) error {
 	}
 
 	return idx.live(ctx)
-
 }
 
 func (idx *Indexer) live(ctx context.Context) error {
@@ -151,7 +152,7 @@ func (idx *Indexer) live(ctx context.Context) error {
 	}
 	defer sub.Unsubscribe()
 
-	idx.l.Info("subscribed to new heads")
+	idx.l.Info("Subscribed to new heads")
 
 	for {
 		select {
@@ -159,7 +160,7 @@ func (idx *Indexer) live(ctx context.Context) error {
 			return ctx.Err()
 		case err := <-sub.Err():
 			return err
-		case <-idx.stopCh:
+		case <-idx.stop:
 			return nil
 		case h := <-ch:
 			if err := idx.processHead(ctx, h); err != nil {
@@ -170,100 +171,109 @@ func (idx *Indexer) live(ctx context.Context) error {
 }
 
 func (idx *Indexer) processHead(ctx context.Context, h *types.Header) error {
-	ch := idx.head
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+
+	ih := idx.head
 
 	// Only check for reorgs when appending the strictly sequential next block.
 	// This safely bypasses the check during the brief transition from the
 	// backfilled state to the live network head.
-	if ch.Number.Uint64() == h.Number.Uint64()-1 &&
-		ch.Hash() != h.ParentHash {
-		idx.logger.Warn("reorg detected", "old", ch.Number, "new", h.Number)
+	if ih.Number == h.Number.Uint64()-1 && ih.Hash != h.ParentHash {
+		idx.l.Warn("reorg detected",
+			"old", ih.Hash,
+			"new", h.Hash)
 
-		return ErrReorg
+		return errReorg
 	}
 
-	if err := idx.processRange(ctx, ch.Number.Uint64()+1, h.Number.Uint64()); err != nil {
+	if err := idx.processRange(ctx, ih.Number+1, h.Number.Uint64()); err != nil {
 		return err
 	}
 
-	idx.head = h
+	idx.head = &BlockRef{
+		Number: h.Number.Uint64(),
+		Hash:   h.Hash(),
+	}
 
-	// if num%idx.cfg.checkpointInterval == 0 {
-	// 	if err := idx.checkpoint(ctx); err != nil {
-	// 		return err
-	// 	}
-	// 	if err := idx.prune(ctx); err != nil {
-	// 		return err
-	// 	}
-	// }
+	for s := range idx.subs {
+		select {
+		case s <- *idx.head:
+		default:
+			idx.l.Debug("Subscriber is busy, skipping")
+		}
+	}
 
 	return nil
 }
 
 func (idx *Indexer) backfill(ctx context.Context) error {
-	final, err := idx.httpC.HeaderByNumber(ctx, big.NewInt(int64(rpc.FinalizedBlockNumber)))
+	final, err := idx.c.HeaderByNumber(ctx, big.NewInt(int64(rpc.FinalizedBlockNumber)))
 	if err != nil {
 		return err
 	}
 
 	from := idx.h.Filter().FromBlock
 	if idx.head != nil {
-		from = idx.head.Number.Uint64() + 1
+		from = idx.head.Number + 1
 	}
 	to := final.Number.Uint64()
 
-	if from <= to {
-		idx.logger.Info("starting backfill", "from", from, "to", to)
+	if from > to {
+		idx.l.Info("Backfill skipped, already up to date with finalized block")
 
-		if err := idx.processRange(ctx, from, to); err != nil {
-			return err
-		}
-	} else {
-		idx.logger.Info("backfill skipped, already up to date with finalized block")
+		return nil
 	}
 
-	idx.head = final
+	idx.l.Info("Starting backfill",
+		"from", from,
+		"to", to)
+
+	if err := idx.processRange(ctx, from, to); err != nil {
+		return err
+	}
+
+	idx.head = &BlockRef{
+		Number: final.Number.Uint64(),
+		Hash:   final.Hash(),
+	}
 
 	return nil
 }
 
 func (idx *Indexer) processRange(ctx context.Context, from, to uint64) error {
 	if from > to {
-		return fmt.Errorf("invalid block range: from (%d) > to (%d)", from, to)
+		panic(fmt.Errorf("invalid block range: from (%d) > to (%d)", from, to))
 	}
 
-	totalBlocks := to - from + 1
+	total := to - from + 1
 
-	for start := from; start <= to; start += idx.cfg.maxBlockRange {
-		end := min(start+idx.cfg.maxBlockRange-1, to)
+	for start := from; start <= to; start += uint64(idx.maxBlockRange) {
+		end := min(start+uint64(idx.maxBlockRange)-1, to)
 
-		fetchStart := time.Now()
-		logs, err := idx.fetchLogs(ctx, start, end)
+		logs, err := idx.getLogs(ctx, start, end)
 		if err != nil {
 			return fmt.Errorf("fetch logs for blocks %d-%d: %w", start, end, err)
 		}
-		fetchDur := time.Since(fetchStart)
 
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 
-		processStart := time.Now()
+		st := time.Now()
 		if err := idx.h.Process(ctx, logs); err != nil {
-			return err
+			return fmt.Errorf("process logs: %w", err)
 		}
-		processDur := time.Since(processStart)
+		dur := time.Since(st)
 
 		processed := end - from + 1
-		progress := float64(processed) / float64(totalBlocks) * 100.0
+		progress := float64(processed) / float64(total) * 100.0
 
-		idx.logger.Debug("processed chunk",
+		idx.l.Info("Processed chunk",
 			"progress", fmt.Sprintf("%.2f%%", progress),
+			"duration", dur,
 			"from", start,
-			"to", end,
-			"fetch_dur", fetchDur,
-			"process_dur", processDur,
-		)
+			"to", end)
 	}
 
 	return nil
@@ -279,78 +289,106 @@ func (idx *Indexer) filterQuery(from, to uint64) ethereum.FilterQuery {
 	}
 }
 
-func (idx *Indexer) fetchLogs(ctx context.Context, from, to uint64) ([]types.Log, error) {
+func (idx *Indexer) getLogs(ctx context.Context, from, to uint64) ([]types.Log, error) {
+	key := fmt.Sprintf("logs-%d-%d", from, to)
+
+	if !idx.isLive {
+		logsb, err := idx.s.Load(key)
+		if err != nil {
+			return nil, fmt.Errorf("loading logs: %w", err)
+		}
+		if len(logsb) > 0 {
+			var logs Logs
+			if err := logs.UnmarshalBinary(logsb); err != nil {
+				return nil, fmt.Errorf("unmarshal logs: %w", err)
+			}
+			return logs, nil
+		}
+	}
+
 	q := idx.filterQuery(from, to)
 
-	if idx.isLive {
-		return idx.httpC.FilterLogs(ctx, q)
-	}
-
-	cached, err := idx.ls.Load(q)
+	st := time.Now()
+	logs, err := idx.c.FilterLogs(ctx, q)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("fetch logs: %w", err)
 	}
-	if len(cached) > 0 {
-		return cached, nil
-	}
+	dur := time.Since(st)
 
-	logs, err := idx.httpC.FilterLogs(ctx, q)
-	if err != nil {
-		return nil, err
-	}
-	if err := idx.ls.Save(q, logs); err != nil {
-		return nil, err
+	idx.l.Debug("Fetched logs",
+		"duration", dur,
+		"count", len(logs),
+		"from", from,
+		"to", to)
+
+	if !idx.isLive {
+		logsb, err := Logs(logs).MarshalBinary()
+		if err != nil {
+			return nil, fmt.Errorf("marshal logs: %w", err)
+		}
+		if err := idx.s.Save(key, logsb); err != nil {
+			return nil, fmt.Errorf("saving logs: %w", err)
+		}
 	}
 
 	return logs, nil
 }
 
 func (idx *Indexer) restore(ctx context.Context) error {
-	cp, err := idx.cs.Load(idx.state.Finalized.Hash)
+	cpb, err := idx.s.Load(finalizedCP)
 	if err != nil {
-		return err
+		return fmt.Errorf("loading checkpoint: %w", err)
 	}
-	if cp == nil {
-		idx.logger.Info("no checkpoint to restore")
+	if len(cpb) == 0 {
 		return nil
 	}
 
-	if err := idx.h.Restore(ctx, cp.State); err != nil {
-		return fmt.Errorf("restore checkpoint %s: %w", cp.Header.Hash, err)
+	var cp checkpoint
+	if err := cp.UnmarshalBinary(cpb); err != nil {
+		return fmt.Errorf("parsing checkpoint: %w", err)
 	}
 
-	idx.head = cp.Header
+	if err := idx.h.Restore(ctx, cp.State); err != nil {
+		return fmt.Errorf("restore checkpoint %s: %w", cp.BlockHash, err)
+	}
 
-	idx.logger.Info("Restored checkpoint",
-		"number", cp.Header.Number,
-		"hash", cp.Header.Hash)
+	ref := &BlockRef{
+		Number: cp.BlockNumber,
+		Hash:   cp.BlockHash,
+	}
+
+	idx.head = ref
+
+	idx.l.Info("Restored checkpoint",
+		"number", cp.BlockNumber,
+		"hash", cp.BlockHash)
 
 	return nil
 }
 
 func (idx *Indexer) promote(ctx context.Context) error {
-	var dangling, finalized *types.Header
+	var d, f *types.Header
+	var dErr, fErr error
 
-	var eg errgroup.Group
+	var wg sync.WaitGroup
 
-	eg.Go(func() (err error) {
-		dangling, err = idx.httpC.HeaderByNumber(ctx, idx.state.Dangling.Number)
-		return
-	})
-	eg.Go(func() (err error) {
-		finalized, err = idx.httpC.HeaderByNumber(ctx, big.NewInt(int64(rpc.FinalizedBlockNumber)))
-		return
-	})
+	wg.Go(func() { d, dErr = idx.c.HeaderByNumber(ctx, big.NewInt(int64(idx.dangling.Number))) })
+	wg.Go(func() { f, fErr = idx.c.HeaderByNumber(ctx, big.NewInt(int64(rpc.FinalizedBlockNumber))) })
 
-	if err := eg.Wait(); err != nil {
-		return err
+	wg.Wait()
+
+	if dErr != nil {
+		return dErr
+	}
+	if fErr != nil {
+		return fErr
 	}
 
-	// Make sure dangling hash matches the node
+	// Make sure dangling hash matches the node's
 	// otherwise it means there was a reorg,
 	// so we discard the dangling checkpoint
-	if idx.dangling.Hash() != dangling.Hash() {
-		if err := idx.cs.Delete(idx.dangling.Hash()); err != nil {
+	if idx.dangling.Hash != d.Hash() {
+		if err := idx.s.Delete(danglingCP); err != nil {
 			return err
 		}
 
@@ -360,98 +398,59 @@ func (idx *Indexer) promote(ctx context.Context) error {
 	}
 
 	// If dangling is older than finalized, we promote
-	if dangling.Number.Cmp(finalized.Number) > 0 {
+	if d.Number.Cmp(f.Number) > 0 {
 		return nil
 	}
 
-	idx.finalized = idx.dangling
+	// TODO
 
-	// if dangling.Nonce
+	// cpb, err := idx.s.Load(danglingCP)
+	// if err != nil {
+	// 	return fmt.Errorf("loading checkpoint: %w", err)
+	// }
 
-	// 1. Find latest finalized checkpoint
-	{
-		final, err := idx.finalizedHeader(ctx)
-		if err != nil {
-			return err
-		}
-		finalNum := final.Number.Uint64()
+	// var cp checkpoint
+	// if err := cp.UnmarshalBinary(cpb); err != nil {
+	// 	return fmt.Errorf("unmarshal checkpoint: %w", err)
+	// }
 
-		var found bool
-
-		for i := len(idx.checkpoints) - 1; i >= 0; i-- {
-			finalHeader = idx.checkpoints[i]
-
-			if finalHeader.Number < finalNum ||
-				(finalHeader.Number == finalNum && finalHeader.Hash == final.Hash()) {
-				found = true
-				break
-			}
-		}
-
-		if !found {
-			return nil
-		}
-	}
-
-	// 2. Promote checkpoint
-	{
-		var cp checkpoint
-		ok, err := idx.cache.Load(checkpointKey(finalHeader), &cp)
-		if err != nil {
-			return err
-		}
-		if !ok {
-			return errors.New("checkpoint from memory not found in store")
-		}
-		if err := idx.cache.Save(finalizedCheckpointKey(), cp); err != nil {
-			return err
-		}
-		idx.logger.Debug("finalized checkpoint", "block", cp.Header.Number, "hash", cp.Header.Hash)
-	}
-
-	// 3. Prune old checkpoints
-	{
-		deletedCount := 0
-		// Ensure the slice is compacted exactly once, even if we return an error early.
-		defer func() {
-			if deletedCount > 0 {
-				idx.checkpoints = slices.Delete(idx.checkpoints, 0, deletedCount)
-			}
-		}()
-		for deletedCount < len(idx.checkpoints) && idx.checkpoints[deletedCount].Number <= finalHeader.Number {
-			err := idx.cache.Delete(checkpointKey(idx.checkpoints[deletedCount]))
-			if err != nil {
-				return err
-			}
-			deletedCount++
-		}
-
-		idx.logger.Debug("pruned old checkpoints", "up-to-block", finalHeader.Number, "count", deletedCount)
-	}
+	// idx.finalized = idx.dangling
 
 	return nil
 }
 
 func (idx *Indexer) checkpoint(ctx context.Context) error {
-	idx.hMu.RLock()
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+
 	state, err := idx.h.Snapshot(ctx)
-	idx.hMu.RUnlock()
 	if err != nil {
 		return err
 	}
 
-	cp := checkpoint{Header: idx.head, State: state}
-	h := cp.Header.Hash()
-
-	if err := idx.cs.Save(h, cp); err != nil {
-		return err
+	cp := checkpoint{
+		BlockNumber: idx.head.Number,
+		BlockHash:   idx.head.Hash,
+		State:       state,
 	}
 
-	idx.dangling = h
+	cpb, err := cp.MarshalBinary()
+	if err != nil {
+		return fmt.Errorf("marshal checkpoint: %w", err)
+	}
 
-	idx.logger.Info("Saved dangling checkpoint",
-		"number", cp.Header.Number,
-		"hash", cp.Header.Hash)
+	if err := idx.s.Save(danglingCP, cpb); err != nil {
+		return fmt.Errorf("saving checkpoint: %w", err)
+	}
+
+	idx.dangling = &BlockRef{
+		Number: cp.BlockNumber,
+		Hash:   cp.BlockHash,
+	}
+
+	idx.l.Info("Saved dangling checkpoint",
+		"number", cp.BlockNumber,
+		"hash", cp.BlockHash)
 
 	return nil
 }
