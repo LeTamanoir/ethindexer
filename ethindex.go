@@ -31,23 +31,24 @@ type Indexer struct {
 	// Configs
 	newHeadsBuffer int
 	maxBlockRange  uint64
-	finalityDepth  int
+	finalityDepth  uint64
 	maxBackoff     time.Duration
 	retryFunc      func(err error, attempt int) bool
 
-	c Client
 	l *slog.Logger
+	c Client
 	h Handler
 	s Store
 
+	// Subscribe
+	cond *sync.Cond
+
 	// State
-	mu       sync.RWMutex
 	dangling *BlockRef
 	head     *BlockRef
 	isLive   bool
 
 	// Chans
-	subs map[chan BlockRef]struct{}
 	stop chan struct{}
 }
 
@@ -65,18 +66,19 @@ func New(c Client, h Handler, s Store, cfg Config) *Indexer {
 	if cfg.MaxBackoff == 0 {
 		cfg.MaxBackoff = 2 * time.Second
 	}
-	if cfg.Retry == nil {
-		cfg.Retry = func(err error, attempt int) bool { return false }
+	if cfg.RetryFunc == nil {
+		cfg.RetryFunc = func(err error, attempt int) bool { return false }
 	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
-	return &Indexer{
+
+	idx := &Indexer{
 		newHeadsBuffer: cfg.NewHeadsBuffer,
 		maxBlockRange:  cfg.MaxBlockRange,
 		finalityDepth:  cfg.FinalityDepth,
 		maxBackoff:     cfg.MaxBackoff,
-		retryFunc:      cfg.Retry,
+		retryFunc:      cfg.RetryFunc,
 
 		l: cfg.Logger,
 		c: c,
@@ -85,6 +87,9 @@ func New(c Client, h Handler, s Store, cfg Config) *Indexer {
 
 		stop: make(chan struct{}),
 	}
+	idx.cond = sync.NewCond(&sync.Mutex{})
+
+	return idx
 }
 
 // Run starts the indexer
@@ -115,16 +120,52 @@ func (idx *Indexer) Run(ctx context.Context) error {
 		idx.l.Error("Indexer error",
 			"error", err,
 			"attempt", attempt,
-			"retrying-in", waitTime)
+			"retrying_in", waitTime)
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-idx.stop:
+			return nil
+		case <-time.After(waitTime):
+		}
 
 		attempt++
 	}
 }
 
-func (idx *Indexer) Subscribe() (ch chan BlockRef, unsub func()) {
-	ch = make(chan BlockRef)
-	idx.subs[ch] = struct{}{}
-	return ch, func() { close(ch); delete(idx.subs, ch) }
+// Wait blocks until the indexer has processed a new block and returns the latest head.
+// The caller must call the returned release function to continue accepting updates.
+//
+// Example:
+//
+//	head, release := idx.Wait()
+//	defer release()
+//	fmt.Println("new head block:", head.Number)
+func (idx *Indexer) Wait(ctx context.Context) (head BlockRef, release func(), err error) {
+	idx.cond.L.Lock()
+
+	var num uint64
+	if idx.head != nil {
+		num = idx.head.Number
+	}
+
+	stop := context.AfterFunc(ctx, func() {
+		idx.cond.L.Lock()
+		defer idx.cond.L.Unlock()
+		idx.cond.Broadcast()
+	})
+	defer stop()
+
+	for idx.head == nil || idx.head.Number == num {
+		idx.cond.Wait()
+
+		if err := ctx.Err(); err != nil {
+			return BlockRef{}, nil, err
+		}
+	}
+
+	return *idx.head, func() { idx.cond.L.Unlock() }, nil
 }
 
 // Stop gracefully shuts down the indexer.
@@ -140,6 +181,8 @@ func (idx *Indexer) run(ctx context.Context) error {
 	if err := idx.backfill(ctx); err != nil {
 		return err
 	}
+
+	go idx.checkpointWorker(ctx)
 
 	return idx.live(ctx)
 }
@@ -171,8 +214,8 @@ func (idx *Indexer) live(ctx context.Context) error {
 }
 
 func (idx *Indexer) processHead(ctx context.Context, h *types.Header) error {
-	idx.mu.Lock()
-	defer idx.mu.Unlock()
+	idx.cond.L.Lock()
+	defer idx.cond.L.Unlock()
 
 	ih := idx.head
 
@@ -196,18 +239,15 @@ func (idx *Indexer) processHead(ctx context.Context, h *types.Header) error {
 		Hash:   h.Hash(),
 	}
 
-	for s := range idx.subs {
-		select {
-		case s <- *idx.head:
-		default:
-			idx.l.Debug("Subscriber is busy, skipping")
-		}
-	}
+	idx.cond.Broadcast()
 
 	return nil
 }
 
 func (idx *Indexer) backfill(ctx context.Context) error {
+	idx.cond.L.Lock()
+	defer idx.cond.L.Unlock()
+
 	final, err := idx.c.HeaderByNumber(ctx, big.NewInt(int64(rpc.FinalizedBlockNumber)))
 	if err != nil {
 		return err
@@ -253,7 +293,7 @@ func (idx *Indexer) processRange(ctx context.Context, from, to uint64) error {
 
 		logs, err := idx.getLogs(ctx, start, end)
 		if err != nil {
-			return fmt.Errorf("fetch logs for blocks %d-%d: %w", start, end, err)
+			return fmt.Errorf("get logs: %w", err)
 		}
 
 		if err := ctx.Err(); err != nil {
@@ -295,7 +335,7 @@ func (idx *Indexer) getLogs(ctx context.Context, from, to uint64) ([]types.Log, 
 	if !idx.isLive {
 		logsb, err := idx.s.Load(key)
 		if err != nil {
-			return nil, fmt.Errorf("loading logs: %w", err)
+			return nil, fmt.Errorf("load logs: %w", err)
 		}
 		if len(logsb) > 0 {
 			var logs Logs
@@ -311,7 +351,7 @@ func (idx *Indexer) getLogs(ctx context.Context, from, to uint64) ([]types.Log, 
 	st := time.Now()
 	logs, err := idx.c.FilterLogs(ctx, q)
 	if err != nil {
-		return nil, fmt.Errorf("fetch logs: %w", err)
+		return nil, fmt.Errorf("filter logs: %w", err)
 	}
 	dur := time.Since(st)
 
@@ -327,7 +367,7 @@ func (idx *Indexer) getLogs(ctx context.Context, from, to uint64) ([]types.Log, 
 			return nil, fmt.Errorf("marshal logs: %w", err)
 		}
 		if err := idx.s.Save(key, logsb); err != nil {
-			return nil, fmt.Errorf("saving logs: %w", err)
+			return nil, fmt.Errorf("save logs: %w", err)
 		}
 	}
 
@@ -335,9 +375,12 @@ func (idx *Indexer) getLogs(ctx context.Context, from, to uint64) ([]types.Log, 
 }
 
 func (idx *Indexer) restore(ctx context.Context) error {
+	idx.cond.L.Lock()
+	defer idx.cond.L.Unlock()
+
 	cpb, err := idx.s.Load(finalizedCP)
 	if err != nil {
-		return fmt.Errorf("loading checkpoint: %w", err)
+		return fmt.Errorf("load finalized checkpoint: %w", err)
 	}
 	if len(cpb) == 0 {
 		return nil
@@ -345,7 +388,7 @@ func (idx *Indexer) restore(ctx context.Context) error {
 
 	var cp checkpoint
 	if err := cp.UnmarshalBinary(cpb); err != nil {
-		return fmt.Errorf("parsing checkpoint: %w", err)
+		return fmt.Errorf("parse finalized checkpoint: %w", err)
 	}
 
 	if err := idx.h.Restore(ctx, cp.State); err != nil {
@@ -366,63 +409,65 @@ func (idx *Indexer) restore(ctx context.Context) error {
 	return nil
 }
 
-func (idx *Indexer) promote(ctx context.Context) error {
-	var d, f *types.Header
-	var dErr, fErr error
-
-	var wg sync.WaitGroup
-
-	wg.Go(func() { d, dErr = idx.c.HeaderByNumber(ctx, big.NewInt(int64(idx.dangling.Number))) })
-	wg.Go(func() { f, fErr = idx.c.HeaderByNumber(ctx, big.NewInt(int64(rpc.FinalizedBlockNumber))) })
-
-	wg.Wait()
-
-	if dErr != nil {
-		return dErr
-	}
-	if fErr != nil {
-		return fErr
-	}
-
-	// Make sure dangling hash matches the node's
-	// otherwise it means there was a reorg,
-	// so we discard the dangling checkpoint
-	if idx.dangling.Hash != d.Hash() {
-		if err := idx.s.Delete(danglingCP); err != nil {
+func (idx *Indexer) checkpointWorker(ctx context.Context) error {
+	for {
+		h, release, err := idx.Wait(ctx)
+		if err != nil {
 			return err
 		}
 
-		idx.dangling = nil
+		if idx.dangling == nil {
+			if err := idx.checkpoint(ctx); err != nil {
+				return fmt.Errorf("initial checkpoint: %w", err)
+			}
+		}
 
-		return nil
+		if h.Number >= idx.dangling.Number+idx.finalityDepth {
+			if err := idx.promote(ctx); err != nil {
+				return fmt.Errorf("promote checkpoint: %w", err)
+			}
+
+			if err := idx.checkpoint(ctx); err != nil {
+				return fmt.Errorf("next checkpoint: %w", err)
+			}
+		}
+
+		release()
+	}
+}
+
+func (idx *Indexer) promote(ctx context.Context) error {
+	cpb, err := idx.s.Load(danglingCP)
+	if err != nil {
+		return fmt.Errorf("load dangling checkpoint: %w", err)
+	}
+	if len(cpb) == 0 {
+		return errors.New("dangling checkpoint missing from store")
 	}
 
-	// If dangling is older than finalized, we promote
-	if d.Number.Cmp(f.Number) > 0 {
-		return nil
+	var cp checkpoint
+	if err := cp.UnmarshalBinary(cpb); err != nil {
+		return fmt.Errorf("parse dangling checkpoint: %w", err)
 	}
 
-	// TODO
+	if cp.BlockNumber != idx.dangling.Number || cp.BlockHash != idx.dangling.Hash {
+		return fmt.Errorf("dangling checkpoint/store mismatch")
+	}
 
-	// cpb, err := idx.s.Load(danglingCP)
-	// if err != nil {
-	// 	return fmt.Errorf("loading checkpoint: %w", err)
-	// }
+	if err := idx.s.Save(finalizedCP, cpb); err != nil {
+		return fmt.Errorf("save finalized checkpoint: %w", err)
+	}
 
-	// var cp checkpoint
-	// if err := cp.UnmarshalBinary(cpb); err != nil {
-	// 	return fmt.Errorf("unmarshal checkpoint: %w", err)
-	// }
+	idx.dangling = nil
 
-	// idx.finalized = idx.dangling
+	idx.l.Info("Promoted dangling checkpoint",
+		"number", cp.BlockNumber,
+		"hash", cp.BlockHash)
 
 	return nil
 }
 
 func (idx *Indexer) checkpoint(ctx context.Context) error {
-	idx.mu.Lock()
-	defer idx.mu.Unlock()
-
 	state, err := idx.h.Snapshot(ctx)
 	if err != nil {
 		return err
@@ -440,7 +485,7 @@ func (idx *Indexer) checkpoint(ctx context.Context) error {
 	}
 
 	if err := idx.s.Save(danglingCP, cpb); err != nil {
-		return fmt.Errorf("saving checkpoint: %w", err)
+		return fmt.Errorf("save checkpoint: %w", err)
 	}
 
 	idx.dangling = &BlockRef{
