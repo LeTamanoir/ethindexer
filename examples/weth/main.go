@@ -8,15 +8,15 @@ import (
 	"fmt"
 	"log/slog"
 	"math/big"
-	"net/http"
-	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/node"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/joho/godotenv"
@@ -153,18 +153,10 @@ func run() error {
 	}
 
 	heads := make(chan *types.Header, 128)
-	sub, err := wsClient.SubscribeNewHead(ctx, heads)
-	if err != nil {
-		return fmt.Errorf("subscribe heads: %w", err)
-	}
+	sub := event.Resubscribe(2*time.Second, func(ctx context.Context) (event.Subscription, error) {
+		return wsClient.SubscribeNewHead(ctx, heads)
+	})
 	defer sub.Unsubscribe()
-
-	go func() {
-		slog.Info("starting pprof server on :6060")
-		if err := http.ListenAndServe("localhost:6060", nil); err != nil {
-			slog.Error("pprof server failed", "error", err)
-		}
-	}()
 
 	for {
 		select {
