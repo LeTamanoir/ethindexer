@@ -8,23 +8,22 @@ import (
 	"fmt"
 	"log/slog"
 	"math/big"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/node"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/joho/godotenv"
-
 	"github.com/letamanoir/ethindex"
 	"github.com/letamanoir/ethindex/examples/contracts"
 )
 
 var (
-	erc20       = contracts.NewERC20()
 	erc20ABI, _ = contracts.ERC20MetaData.ParseABI()
 
 	transferEventID = erc20ABI.Events["Transfer"].ID
@@ -63,33 +62,39 @@ func (e *WETH) Snapshot(_ context.Context) ([]byte, error) {
 	return b.Bytes(), nil
 }
 
-func (e *WETH) Process(_ context.Context, log types.Log) error {
-	switch log.Topics[0] {
-	case transferEventID:
-		t, err := erc20.UnpackTransferEvent(&log)
-		if err != nil {
-			return err
-		}
+func (e *WETH) Process(_ context.Context, logs []types.Log) error {
+	for _, log := range logs {
+		switch log.Topics[0] {
+		case transferEventID:
+			if len(log.Topics) < 3 {
+				return fmt.Errorf("invalid Transfer event topics")
+			}
+			from := common.BytesToAddress(log.Topics[1].Bytes())
+			to := common.BytesToAddress(log.Topics[2].Bytes())
+			value := new(big.Int).SetBytes(log.Data)
 
-		if t.From != (common.Address{}) {
-			fromBalance := e.Balances[t.From]
-			e.Balances[t.From] = *new(big.Int).Sub(&fromBalance, t.Value)
-		}
-		if t.To != (common.Address{}) {
-			toBalance := e.Balances[t.To]
-			e.Balances[t.To] = *new(big.Int).Add(&toBalance, t.Value)
-		}
-	case approvalEventID:
-		a, err := erc20.UnpackApprovalEvent(&log)
-		if err != nil {
-			return err
-		}
+			if from != (common.Address{}) {
+				fromBalance := e.Balances[from]
+				e.Balances[from] = *new(big.Int).Sub(&fromBalance, value)
+			}
+			if to != (common.Address{}) {
+				toBalance := e.Balances[to]
+				e.Balances[to] = *new(big.Int).Add(&toBalance, value)
+			}
+		case approvalEventID:
+			if len(log.Topics) < 3 {
+				return fmt.Errorf("invalid Approval event topics")
+			}
+			owner := common.BytesToAddress(log.Topics[1].Bytes())
+			spender := common.BytesToAddress(log.Topics[2].Bytes())
+			value := new(big.Int).SetBytes(log.Data)
 
-		al, ok := e.Allowances[a.Owner]
-		if !ok {
-			al = make(map[common.Address]big.Int)
+			al, ok := e.Allowances[owner]
+			if !ok {
+				al = make(map[common.Address]big.Int)
+			}
+			al[spender] = *value
 		}
-		al[a.Spender] = *a.Value
 	}
 	return nil
 }
@@ -132,23 +137,29 @@ func run() error {
 
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug})))
 
-	httpC := ethclient.NewClient(httpRPC)
-	wsC := ethclient.NewClient(wsRPC)
-
 	weth := NewWETH()
 
 	cache := ethindex.NewFileCache("./indexer_data")
 
 	idx := ethindex.New().
 		WithHandler(weth).
-		WithClients(httpC, wsC).
+		WithClients(httpRPC, wsRPC).
 		WithCache(cache).
 		Build()
+
+	go func() {
+		slog.Info("starting pprof server on :6060")
+		if err := http.ListenAndServe("localhost:6060", nil); err != nil {
+			slog.Error("pprof server failed", "error", err)
+		}
+	}()
 
 	return idx.Run(ctx)
 }
 
 func main() {
+	// defer profile.Start(profile.CPUProfile, profile.ProfilePath(".")).Stop()
+
 	if err := run(); err != nil {
 		slog.Error("Indexer error", "error", err)
 		os.Exit(1)

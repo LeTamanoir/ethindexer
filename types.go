@@ -10,60 +10,63 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 )
 
-// ErrReorg is returned when a chain reorganization is detected during indexing.
-var ErrReorg = errors.New("chain reorg detected")
+// ErrReorg is returned when the chain reorgs during indexing.
+var ErrReorg = errors.New("chain reorged")
 
-// Filter defines the criteria used to select Ethereum logs during indexing.
+// Filter specifies the Ethereum logs to fetch during indexing.
 type Filter struct {
-	// FromBlock specifies the starting block number for the backfill phase.
+	// FromBlock is the first block included in the initial backfill.
 	FromBlock uint64
 
 	// Addresses restricts log collection to the given contract addresses.
+	// See [ethereum.FilterQuery.Addresses] for more details.
 	Addresses []common.Address
 
 	// Topics filters logs by their indexed event topics.
+	// See [ethereum.FilterQuery.Topics] for more details.
 	Topics [][]common.Hash
 }
 
-// Handler is implemented by the caller to define indexing logic for a specific
-// set of Ethereum events. The indexer calls its methods to determine which logs
-// to collect, how to process them, and how to persist and restore state.
+// Handler defines the application-specific indexing logic.
 type Handler interface {
-	// Snapshot serializes the current handler state into a byte slice so it
-	// can be persisted as a checkpoint by the indexer.
-	Snapshot(context.Context) ([]byte, error)
+	// Snapshot returns the current handler state for checkpointing.
+	Snapshot() ([]byte, error)
 
-	// Restore deserializes a previously saved snapshot and restores the
-	// handler state to the checkpointed point in time.
-	Restore(context.Context, []byte) error
+	// Restore restores the handler state from a checkpoint snapshot.
+	Restore([]byte) error
 
-	// Filter returns the log filter criteria that the indexer uses to
-	// select relevant events from the chain.
+	// Filter returns the log filter used during indexing.
 	Filter() Filter
 
-	// Process is called for each matching log in block order. It receives the
-	// log and a context that is cancelled when the indexer is shutting down.
-	Process(context.Context, types.Log) error
+	// Process processes matching logs in block order.
+	Process(context.Context, []types.Log) error
 }
 
-// Cache manages persistence for the indexer. It is used to save and restore
-// the indexer state across restarts so that backfilling can resume from the
-// last known position, as well as to cache expensive RPC calls.
-type Cache interface {
-	// Load retrieves the value stored under name and unmarshals it into out.
-	// It returns ok = false if no value exists for that name.
-	Load(name string, out any) (ok bool, err error)
-
-	// Save persists v under the given name, overwriting any existing value.
-	Save(name string, v any) error
-
-	// Delete removes the entry stored under name from the cache.
-	Delete(name string) error
+// Client defines the Ethereum RPC methods required by the indexer.
+type Client interface {
+	FilterLogs(context.Context, ethereum.FilterQuery) ([]types.Log, error)
+	HeaderByNumber(context.Context, *big.Int) (*types.Header, error)
 }
 
-// RPCClient defines the methods the indexer requires from an Ethereum RPC client.
-type RPCClient interface {
-	HeaderByNumber(ctx context.Context, number *big.Int) (*types.Header, error)
-	FilterLogs(ctx context.Context, q ethereum.FilterQuery) ([]types.Log, error)
-	SubscribeNewHead(ctx context.Context, ch chan<- *types.Header) (ethereum.Subscription, error)
+// Config configures the indexer.
+type Config struct {
+	// MaxBlockRange is the maximum block span per backfill RPC call.
+	// The default is 10,000.
+	MaxBlockRange uint64
+
+	// FinalityDepth is the block depth considered finalized.
+	// The default is 64.
+	FinalityDepth uint64
+}
+
+// Store defines the persistence methods used by the indexer.
+type Store interface {
+	// Load returns the data stored under key.
+	Load(key string) ([]byte, error)
+
+	// Save stores data under key, replacing any existing value.
+	Save(key string, data []byte) error
+
+	// Delete removes the data stored under key.
+	Delete(key string) error
 }

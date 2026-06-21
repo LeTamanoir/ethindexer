@@ -3,14 +3,16 @@ package ethindex
 import (
 	"fmt"
 	"io"
+	"math/big"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
 )
 
-func atomicWrite(filename string, fn func(io.Writer) error) error {
+func atomicWrite(filename string, write func(io.Writer) error) error {
 	dir := filepath.Dir(filename)
 
 	f, err := os.CreateTemp(dir, ".tmp-*")
@@ -23,7 +25,7 @@ func atomicWrite(filename string, fn func(io.Writer) error) error {
 		_ = os.Remove(tmp)
 	}()
 
-	if err := fn(f); err != nil {
+	if err := write(f); err != nil {
 		return err
 	}
 	if err := f.Sync(); err != nil {
@@ -32,43 +34,55 @@ func atomicWrite(filename string, fn func(io.Writer) error) error {
 	return os.Rename(f.Name(), filename)
 }
 
-func checkpointKey(h blockHeader) string {
-	return fmt.Sprintf("checkpoint:%d-%s", h.Number, h.Hash)
+func newFilterQuery(f Filter, from, to uint64) ethereum.FilterQuery {
+	return ethereum.FilterQuery{
+		FromBlock: new(big.Int).SetUint64(from),
+		ToBlock:   new(big.Int).SetUint64(to),
+		Addresses: f.Addresses,
+		Topics:    f.Topics,
+	}
 }
 
-func finalizedCheckpointKey() string {
-	return "checkpoint:finalized"
-}
+func logsKey(q ethereum.FilterQuery) string {
+	var parts [][]byte
 
-func filterQueryKey(q ethereum.FilterQuery) string {
-	var sb strings.Builder
-
-	fmt.Fprintf(&sb, "%d-%d", q.FromBlock, q.ToBlock)
-
-	if len(q.Addresses) > 0 {
-		sb.WriteString("|A:")
-		for i, a := range q.Addresses {
-			if i > 0 {
-				sb.WriteByte(',')
-			}
-			sb.WriteString(a.Hex())
+	for _, a := range q.Addresses {
+		parts = append(parts, a[:])
+	}
+	for _, tt := range q.Topics {
+		for _, t := range tt {
+			parts = append(parts, t[:])
 		}
 	}
 
-	if len(q.Topics) > 0 {
-		sb.WriteString("|T:")
-		for i, tt := range q.Topics {
-			if i > 0 {
-				sb.WriteByte(';')
-			}
-			for j, t := range tt {
-				if j > 0 {
-					sb.WriteByte(',')
-				}
-				sb.WriteString(t.Hex())
-			}
-		}
+	hash := crypto.Keccak256Hash(parts...)
+
+	return fmt.Sprintf("logs-%d-%d-%s", q.FromBlock, q.ToBlock, hash)
+}
+
+func loadCachedLogs(s Store, q ethereum.FilterQuery) ([]types.Log, error) {
+	b, err := s.Load(logsKey(q))
+	if err != nil {
+		return nil, fmt.Errorf("load logs: %w", err)
+	}
+	if len(b) == 0 {
+		return nil, nil
 	}
 
-	return sb.String()
+	var logs Logs
+	if err := logs.UnmarshalBinary(b); err != nil {
+		return nil, fmt.Errorf("unmarshal logs: %w", err)
+	}
+	return logs, nil
+}
+
+func saveCachedLogs(s Store, q ethereum.FilterQuery, logs []types.Log) error {
+	b, err := Logs(logs).MarshalBinary()
+	if err != nil {
+		return fmt.Errorf("marshal logs: %w", err)
+	}
+	if err := s.Save(logsKey(q), b); err != nil {
+		return fmt.Errorf("save logs: %w", err)
+	}
+	return nil
 }
