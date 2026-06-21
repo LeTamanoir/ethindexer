@@ -45,7 +45,7 @@ func TestIndexer_Backfill(t *testing.T) {
 		filter: Filter{FromBlock: 50},
 	}
 
-	indexer := New(client, handler, newMockStore(), nil)
+	indexer := NewIndexer(client, handler, newMockStore(), nil)
 
 	err := indexer.Init(ctx)
 	if err != nil && err != context.Canceled {
@@ -81,7 +81,7 @@ func TestIndexer_Live(t *testing.T) {
 		filter: Filter{FromBlock: 10},
 	}
 
-	indexer := New(client, handler, newMockStore(), nil)
+	indexer := NewIndexer(client, handler, newMockStore(), nil)
 
 	if err := indexer.Init(ctx); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -125,7 +125,7 @@ func TestIndexer_Reorg(t *testing.T) {
 		filter: Filter{FromBlock: 10},
 	}
 
-	indexer := New(client, handler, newMockStore(), nil)
+	indexer := NewIndexer(client, handler, newMockStore(), nil)
 
 	if err := indexer.Init(ctx); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -193,7 +193,7 @@ func TestIndexer_Restore(t *testing.T) {
 		filter: Filter{FromBlock: 10},
 	}
 
-	indexer := New(client, handler, store, nil)
+	indexer := NewIndexer(client, handler, store, nil)
 
 	err = indexer.Init(ctx)
 	if err != nil && err != context.Canceled {
