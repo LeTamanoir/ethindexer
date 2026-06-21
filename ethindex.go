@@ -37,15 +37,17 @@ type Indexer struct {
 }
 
 // New creates a new indexer instance
-func New(c Client, h Handler, s Store, cfg *Config) *Indexer {
-	if cfg == nil {
-		cfg = &Config{}
-	}
-	if cfg.FinalityDepth == 0 {
-		cfg.FinalityDepth = 64
-	}
-	if cfg.MaxBlockRange == 0 {
-		cfg.MaxBlockRange = 10_000
+func NewIndexer(c Client, h Handler, s Store, cfg *Config) *Indexer {
+	finalityDepth := uint64(64)
+	maxBlockRange := uint64(10_000)
+
+	if cfg != nil {
+		if cfg.FinalityDepth != 0 {
+			finalityDepth = cfg.FinalityDepth
+		}
+		if cfg.MaxBlockRange != 0 {
+			maxBlockRange = cfg.MaxBlockRange
+		}
 	}
 
 	return &Indexer{
@@ -53,8 +55,8 @@ func New(c Client, h Handler, s Store, cfg *Config) *Indexer {
 		h: h,
 		s: s,
 
-		maxBlockRange: cfg.MaxBlockRange,
-		finalityDepth: cfg.FinalityDepth,
+		maxBlockRange: maxBlockRange,
+		finalityDepth: finalityDepth,
 	}
 }
 
