@@ -16,6 +16,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/node"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/joho/godotenv"
@@ -50,11 +51,11 @@ func (e *WETH) Filter() ethindex.Filter {
 	}
 }
 
-func (e *WETH) Restore(_ context.Context, data []byte) error {
+func (e *WETH) Restore(data []byte) error {
 	return gob.NewDecoder(bytes.NewReader(data)).Decode(e)
 }
 
-func (e *WETH) Snapshot(_ context.Context) ([]byte, error) {
+func (e *WETH) Snapshot() ([]byte, error) {
 	var b bytes.Buffer
 	if err := gob.NewEncoder(&b).Encode(e); err != nil {
 		return nil, err
@@ -125,27 +126,38 @@ func run() error {
 		return fmt.Errorf("missing ETH_WS_URL")
 	}
 
+	// HTTP client drives backfilling (eth_getLogs + finalized block headers).
 	httpRPC, err := rpc.DialOptions(ctx, httpURL, options...)
 	if err != nil {
-		return err
+		return fmt.Errorf("dial http: %w", err)
 	}
+	httpClient := ethclient.NewClient(httpRPC)
 
+	// WebSocket client drives live following via new-head subscriptions.
 	wsRPC, err := rpc.DialOptions(ctx, wsURL, options...)
 	if err != nil {
-		return err
+		return fmt.Errorf("dial ws: %w", err)
 	}
+	wsClient := ethclient.NewClient(wsRPC)
 
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug})))
 
-	weth := NewWETH()
+	store, err := ethindex.NewFileStore("./indexer_data")
+	if err != nil {
+		return fmt.Errorf("create store: %w", err)
+	}
 
-	cache := ethindex.NewFileCache("./indexer_data")
+	idx := ethindex.NewIndexer(httpClient, NewWETH(), store, nil)
+	if err := idx.Init(ctx); err != nil {
+		return fmt.Errorf("init: %w", err)
+	}
 
-	idx := ethindex.New().
-		WithHandler(weth).
-		WithClients(httpRPC, wsRPC).
-		WithCache(cache).
-		Build()
+	heads := make(chan *types.Header, 128)
+	sub, err := wsClient.SubscribeNewHead(ctx, heads)
+	if err != nil {
+		return fmt.Errorf("subscribe heads: %w", err)
+	}
+	defer sub.Unsubscribe()
 
 	go func() {
 		slog.Info("starting pprof server on :6060")
@@ -154,12 +166,22 @@ func run() error {
 		}
 	}()
 
-	return idx.Run(ctx)
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case h := <-heads:
+			if err := idx.Process(ctx, h); err != nil {
+				return fmt.Errorf("process head %d: %w", h.Number, err)
+			}
+			slog.Info("processed head", "number", h.Number.Uint64(), "hash", h.Hash())
+		case err := <-sub.Err():
+			return fmt.Errorf("head subscription: %w", err)
+		}
+	}
 }
 
 func main() {
-	// defer profile.Start(profile.CPUProfile, profile.ProfilePath(".")).Stop()
-
 	if err := run(); err != nil {
 		slog.Error("Indexer error", "error", err)
 		os.Exit(1)
