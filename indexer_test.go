@@ -75,23 +75,6 @@ func TestIndexer_Live(t *testing.T) {
 		filterLogsFunc: func(ctx context.Context, q ethereum.FilterQuery) ([]types.Log, error) {
 			return []types.Log{{BlockNumber: q.FromBlock.Uint64()}}, nil
 		},
-		// subscribeNewHeadFunc: func(ctx context.Context, ch chan<- *types.Header) (ethereum.Subscription, error) {
-		// 	sub := newMockSubscription()
-		// 	go func() {
-		// 		// push blocks to live
-		// 		h10 := &types.Header{Number: big.NewInt(10)}
-		// 		h11 := &types.Header{Number: big.NewInt(11), ParentHash: h10.Hash()}
-		// 		h12 := &types.Header{Number: big.NewInt(12), ParentHash: h11.Hash()}
-		// 		h13 := &types.Header{Number: big.NewInt(13), ParentHash: h12.Hash()}
-
-		// 		for _, h := range []*types.Header{h11, h12, h13} {
-		// 			ch <- h
-		// 		}
-		// 		time.Sleep(50 * time.Millisecond)
-		// 		sub.errCh <- context.Canceled
-		// 	}()
-		// 	return sub, nil
-		// },
 	}
 
 	handler := &mockHandler{
@@ -100,9 +83,19 @@ func TestIndexer_Live(t *testing.T) {
 
 	indexer := New(client, handler, newMockStore(), nil)
 
-	err := indexer.Init(ctx)
-	if err != nil && err != context.Canceled {
-		t.Fatalf("expected context.Canceled, got: %v", err)
+	if err := indexer.Init(ctx); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Simulate the user feeding live new heads to the indexer.
+	h11 := &types.Header{Number: big.NewInt(11), ParentHash: indexer.head.Hash}
+	h12 := &types.Header{Number: big.NewInt(12), ParentHash: h11.Hash()}
+	h13 := &types.Header{Number: big.NewInt(13), ParentHash: h12.Hash()}
+
+	for _, h := range []*types.Header{h11, h12, h13} {
+		if err := indexer.Process(ctx, h); err != nil {
+			t.Fatalf("process head %d: %v", h.Number, err)
+		}
 	}
 
 	if indexer.head.Number != 13 {
@@ -117,7 +110,6 @@ func TestIndexer_Reorg(t *testing.T) {
 
 	reorgTriggered := false
 
-	// calls := 0
 	client := &mockClient{
 		headerByNumberFunc: func(ctx context.Context, number *big.Int) (*types.Header, error) {
 			return &types.Header{
@@ -127,33 +119,6 @@ func TestIndexer_Reorg(t *testing.T) {
 		filterLogsFunc: func(ctx context.Context, q ethereum.FilterQuery) ([]types.Log, error) {
 			return nil, nil
 		},
-		// subscribeNewHeadFunc: func(ctx context.Context, ch chan<- *types.Header) (ethereum.Subscription, error) {
-		// 	sub := newMockSubscription()
-		// 	calls++
-		// 	if calls > 1 {
-		// 		reorgTriggered = true
-		// 		go func() { sub.errCh <- context.Canceled }()
-		// 		return sub, nil
-		// 	}
-
-		// 	go func() {
-		// 		h10 := &types.Header{Number: big.NewInt(10)}
-		// 		// push valid block
-		// 		h11 := &types.Header{Number: big.NewInt(11), ParentHash: h10.Hash()}
-		// 		ch <- h11
-
-		// 		// wait for it to process
-		// 		time.Sleep(10 * time.Millisecond)
-
-		// 		// push invalid block causing reorg (wrong parent hash)
-		// 		h12 := &types.Header{
-		// 			Number:     big.NewInt(12),
-		// 			ParentHash: common.HexToHash("0xdeadbeef"), // mismatch
-		// 		}
-		// 		ch <- h12
-		// 	}()
-		// 	return sub, nil
-		// },
 	}
 
 	handler := &mockHandler{
@@ -162,9 +127,27 @@ func TestIndexer_Reorg(t *testing.T) {
 
 	indexer := New(client, handler, newMockStore(), nil)
 
-	err := indexer.Init(ctx)
-	if err != nil && err != context.Canceled {
+	if err := indexer.Init(ctx); err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Push a valid block.
+	h11 := &types.Header{Number: big.NewInt(11), ParentHash: indexer.head.Hash}
+	if err := indexer.Process(ctx, h11); err != nil {
+		t.Fatalf("process h11: %v", err)
+	}
+
+	// Push a block with the wrong parent hash to trigger a reorg.
+	h12 := &types.Header{
+		Number:     big.NewInt(12),
+		ParentHash: common.HexToHash("0xdeadbeef"), // mismatch
+	}
+	if err := indexer.Process(ctx, h12); err != nil {
+		if err == ErrReorg {
+			reorgTriggered = true
+		} else {
+			t.Fatalf("unexpected error: %v", err)
+		}
 	}
 
 	if !reorgTriggered {
