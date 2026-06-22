@@ -3,7 +3,6 @@ package ethindex
 import (
 	"context"
 	"math/big"
-	"sync"
 	"testing"
 	"time"
 
@@ -35,21 +34,14 @@ func TestIndexer_Backfill(t *testing.T) {
 			}
 			return logs, nil
 		},
-		// subscribeNewHeadFunc: func(ctx context.Context, ch chan<- *types.Header) (ethereum.Subscription, error) {
-		// 	// Stop the indexer as soon as it tries to go live
-		// 	sub := newMockSubscription()
-		// 	go func() { sub.errCh <- context.Canceled }()
-		// 	return sub, nil
-		// },
 	}
 
-	handler := &mockHandler{
-		filter: Filter{FromBlock: 50},
-	}
+	filter := Filter{FromBlock: 50}
+	handler := &mockHandler{}
 
-	indexer := NewIndexer(client, handler, newMockStore(), nil)
+	indexer := NewIndexer(client, handler, filter, newMockStore(), nil)
 
-	err := indexer.Init(ctx)
+	err := indexer.Init(ctx, nil)
 	if err != nil && err != context.Canceled {
 		t.Fatalf("expected context.Canceled, got: %v", err)
 	}
@@ -79,13 +71,12 @@ func TestIndexer_Live(t *testing.T) {
 		},
 	}
 
-	handler := &mockHandler{
-		filter: Filter{FromBlock: 10},
-	}
+	filter := Filter{FromBlock: 10}
+	handler := &mockHandler{}
 
-	indexer := NewIndexer(client, handler, newMockStore(), nil)
+	indexer := NewIndexer(client, handler, filter, newMockStore(), nil)
 
-	if err := indexer.Init(ctx); err != nil {
+	if err := indexer.Init(ctx, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -121,14 +112,13 @@ func TestIndexer_Reorg(t *testing.T) {
 		},
 	}
 
-	handler := &mockHandler{
-		filter: Filter{FromBlock: 10},
-	}
+	filter := Filter{FromBlock: 10}
+	handler := &mockHandler{}
 
 	store := newMockStore()
-	indexer := NewIndexer(client, handler, store, nil)
+	indexer := NewIndexer(client, handler, filter, store, nil)
 
-	if err := indexer.Init(ctx); err != nil {
+	if err := indexer.Init(ctx, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -142,7 +132,7 @@ func TestIndexer_Reorg(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Save(finalizedCP, cpb); err != nil {
+	if err := store.Save(t.Context(), finalizedCP, cpb); err != nil {
 		t.Fatal(err)
 	}
 
@@ -199,37 +189,33 @@ func TestIndexer_Progress(t *testing.T) {
 		},
 	}
 
-	handler := &mockHandler{
-		filter: Filter{FromBlock: 50},
-	}
+	filter := Filter{FromBlock: 50}
+	handler := &mockHandler{}
 
-	indexer := NewIndexer(client, handler, newMockStore(), nil)
+	var lastProgress Progress
+	progress := make(chan Progress)
+	done := make(chan struct{})
 
-	// Poll Progress concurrently with Init to verify it is race-free.
-	var wg sync.WaitGroup
-	wg.Add(1)
+	indexer := NewIndexer(client, handler, filter, newMockStore(), nil)
+
 	go func() {
-		defer wg.Done()
-		for {
-			p := indexer.Progress()
-			if p.ToBlock > 0 && p.CurrentBlock == p.ToBlock {
-				return
-			}
-			time.Sleep(2 * time.Millisecond)
+		for p := range progress {
+			lastProgress = p
 		}
+		close(done)
 	}()
 
-	if err := indexer.Init(ctx); err != nil && err != context.Canceled {
+	if err := indexer.Init(ctx, progress); err != nil && err != context.Canceled {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	wg.Wait()
+	close(progress)
+	<-done
 
-	p := indexer.Progress()
-	if p.ToBlock != finalizedBlockNum {
-		t.Errorf("expected to block %d, got %d", finalizedBlockNum, p.ToBlock)
+	if lastProgress.ToBlock != finalizedBlockNum {
+		t.Errorf("expected to block %d, got %d", finalizedBlockNum, lastProgress.ToBlock)
 	}
-	if p.CurrentBlock != finalizedBlockNum {
-		t.Errorf("expected current block %d, got %d", finalizedBlockNum, p.CurrentBlock)
+	if lastProgress.CurrentBlock != finalizedBlockNum {
+		t.Errorf("expected current block %d, got %d", finalizedBlockNum, lastProgress.CurrentBlock)
 	}
 }
 
@@ -249,7 +235,7 @@ func TestIndexer_Restore(t *testing.T) {
 	}
 
 	store := newMockStore()
-	store.Save(finalizedCP, cpb)
+	store.Save(t.Context(), finalizedCP, cpb)
 
 	client := &mockClient{
 		headerByNumberFunc: func(ctx context.Context, number *big.Int) (*types.Header, error) {
@@ -260,20 +246,14 @@ func TestIndexer_Restore(t *testing.T) {
 		filterLogsFunc: func(ctx context.Context, q ethereum.FilterQuery) ([]types.Log, error) {
 			return nil, nil
 		},
-		// subscribeNewHeadFunc: func(ctx context.Context, ch chan<- *types.Header) (ethereum.Subscription, error) {
-		// 	sub := newMockSubscription()
-		// 	go func() { sub.errCh <- context.Canceled }()
-		// 	return sub, nil
-		// },
 	}
 
-	handler := &mockHandler{
-		filter: Filter{FromBlock: 10},
-	}
+	filter := Filter{FromBlock: 10}
+	handler := &mockHandler{}
 
-	indexer := NewIndexer(client, handler, store, nil)
+	indexer := NewIndexer(client, handler, filter, store, nil)
 
-	err = indexer.Init(ctx)
+	err = indexer.Init(ctx, nil)
 	if err != nil && err != context.Canceled {
 		t.Fatalf("unexpected error: %v", err)
 	}

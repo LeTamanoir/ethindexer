@@ -10,12 +10,9 @@ import (
 )
 
 // Progress is a best-effort snapshot of an in-progress backfill.
-// It is safe to call [Indexer.Progress] concurrently with [Indexer.Init].
 type Progress struct {
-	// CurrentBlock is the highest block whose logs have been processed so far.
 	CurrentBlock uint64
-	// ToBlock is the target block of the current backfill.
-	ToBlock uint64
+	ToBlock      uint64
 }
 
 // Filter specifies the Ethereum logs to fetch during indexing.
@@ -35,13 +32,10 @@ type Filter struct {
 // Handler defines the application-specific indexing logic.
 type Handler interface {
 	// Snapshot returns the current handler state for checkpointing.
-	Snapshot() ([]byte, error)
+	Snapshot(context.Context) ([]byte, error)
 
 	// Restore restores the handler state from a checkpoint snapshot.
-	Restore([]byte) error
-
-	// Filter returns the log filter used during indexing.
-	Filter() Filter
+	Restore(context.Context, []byte) error
 
 	// Process processes matching logs in block order.
 	Process(context.Context, []types.Log) error
@@ -62,16 +56,19 @@ type Config struct {
 	// FinalityDepth is the block depth considered finalized.
 	// The default is 64.
 	FinalityDepth uint64
+
+	// ProgressCh is used to track indexer progress when backfilling
+	ProgressCh chan Progress
 }
 
 // Store defines the persistence methods used by the indexer.
 type Store interface {
 	// Load returns the data stored under key.
-	Load(key string) ([]byte, error)
+	Load(ctx context.Context, key string) ([]byte, error)
 
 	// Save stores data under key, replacing any existing value.
-	Save(key string, data []byte) error
+	Save(ctx context.Context, key string, data []byte) error
 
 	// Delete removes the data stored under key.
-	Delete(key string) error
+	Delete(ctx context.Context, key string) error
 }

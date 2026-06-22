@@ -2,6 +2,7 @@ package ethindex
 
 import (
 	"compress/gzip"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -28,7 +29,7 @@ func (s *FileStore) path(key string) string {
 	return filepath.Join(s.dir, key+".gz")
 }
 
-func (s *FileStore) Load(key string) ([]byte, error) {
+func (s *FileStore) Load(_ context.Context, key string) ([]byte, error) {
 	f, err := os.Open(s.path(key))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -47,7 +48,7 @@ func (s *FileStore) Load(key string) ([]byte, error) {
 	return io.ReadAll(gr)
 }
 
-func (s *FileStore) Save(key string, data []byte) error {
+func (s *FileStore) Save(_ context.Context, key string, data []byte) error {
 	return atomicWrite(s.path(key), func(w io.Writer) error {
 		gw := gzip.NewWriter(w)
 		if _, err := gw.Write(data); err != nil {
@@ -58,7 +59,7 @@ func (s *FileStore) Save(key string, data []byte) error {
 	})
 }
 
-func (s *FileStore) Delete(key string) error {
+func (s *FileStore) Delete(_ context.Context, key string) error {
 	err := os.Remove(s.path(key))
 	if err != nil && errors.Is(err, os.ErrNotExist) {
 		return nil

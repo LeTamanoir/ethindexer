@@ -29,6 +29,12 @@ var (
 
 	transferEventID = erc20ABI.Events["Transfer"].ID
 	approvalEventID = erc20ABI.Events["Approval"].ID
+
+	wethFilter = ethindex.Filter{
+		FromBlock: 4719568,
+		Addresses: []common.Address{common.HexToAddress("0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2")},
+		Topics:    [][]common.Hash{{transferEventID, approvalEventID}},
+	}
 )
 
 type WETH struct {
@@ -43,19 +49,11 @@ func NewWETH() *WETH {
 	}
 }
 
-func (e *WETH) Filter() ethindex.Filter {
-	return ethindex.Filter{
-		FromBlock: 4719568,
-		Addresses: []common.Address{common.HexToAddress("0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2")},
-		Topics:    [][]common.Hash{{transferEventID, approvalEventID}},
-	}
-}
-
-func (e *WETH) Restore(data []byte) error {
+func (e *WETH) Restore(_ context.Context, data []byte) error {
 	return gob.NewDecoder(bytes.NewReader(data)).Decode(e)
 }
 
-func (e *WETH) Snapshot() ([]byte, error) {
+func (e *WETH) Snapshot(_ context.Context) ([]byte, error) {
 	var b bytes.Buffer
 	if err := gob.NewEncoder(&b).Encode(e); err != nil {
 		return nil, err
@@ -147,37 +145,26 @@ func run() error {
 		return fmt.Errorf("create store: %w", err)
 	}
 
-	idx := ethindex.NewIndexer(httpClient, NewWETH(), store, nil)
+	idx := ethindex.NewIndexer(httpClient, NewWETH(), wethFilter, store, nil)
 
-	// Poll backfill progress while Init runs. Init blocks during the initial
-	// sync (potentially long), so the reporting happens on a separate goroutine.
-	initDone := make(chan struct{})
+	progress := make(chan ethindex.Progress)
 	go func() {
-		t := time.NewTicker(2 * time.Second)
-		defer t.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-initDone:
-				return
-			case <-t.C:
-				p := idx.Progress()
-				if p.ToBlock == 0 {
-					continue
-				}
+			case p := <-progress:
 				slog.Info("backfill progress",
 					"block", fmt.Sprintf("%d/%d", p.CurrentBlock, p.ToBlock),
-				)
+					"percent", fmt.Sprintf("%%%.2f", float64(p.CurrentBlock)/float64(p.ToBlock)*100.0))
 			}
 		}
 	}()
 
-	if err := idx.Init(ctx); err != nil {
-		close(initDone)
+	if err := idx.Init(ctx, progress); err != nil {
 		return fmt.Errorf("init: %w", err)
 	}
-	close(initDone)
+	close(progress)
 
 	heads := make(chan *types.Header, 128)
 	sub := event.Resubscribe(2*time.Second, func(ctx context.Context) (event.Subscription, error) {
