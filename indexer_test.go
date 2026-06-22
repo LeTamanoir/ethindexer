@@ -4,6 +4,7 @@ import (
 	"context"
 	"math/big"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
@@ -33,23 +34,14 @@ func TestIndexer_Backfill(t *testing.T) {
 			}
 			return logs, nil
 		},
-		// subscribeNewHeadFunc: func(ctx context.Context, ch chan<- *types.Header) (ethereum.Subscription, error) {
-		// 	// Stop the indexer as soon as it tries to go live
-		// 	sub := newMockSubscription()
-		// 	go func() { sub.errCh <- context.Canceled }()
-		// 	return sub, nil
-		// },
 	}
 
-	handler := &mockHandler{
-		filter: Filter{FromBlock: 50},
-	}
+	filter := Filter{FromBlock: 50}
+	handler := &mockHandler{}
 
-	indexer := NewIndexer(client, handler, newMockStore(), nil)
-
-	err := indexer.Init(ctx)
-	if err != nil && err != context.Canceled {
-		t.Fatalf("expected context.Canceled, got: %v", err)
+	indexer, err := NewIndexer(ctx, client, handler, filter, newMockStore(), nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 
 	if indexer.head.Number != finalizedBlockNum {
@@ -77,13 +69,11 @@ func TestIndexer_Live(t *testing.T) {
 		},
 	}
 
-	handler := &mockHandler{
-		filter: Filter{FromBlock: 10},
-	}
+	filter := Filter{FromBlock: 10}
+	handler := &mockHandler{}
 
-	indexer := NewIndexer(client, handler, newMockStore(), nil)
-
-	if err := indexer.Init(ctx); err != nil {
+	indexer, err := NewIndexer(ctx, client, handler, filter, newMockStore(), nil)
+	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -108,44 +98,55 @@ func TestIndexer_Reorg(t *testing.T) {
 
 	finalizedBlockNum := uint64(10)
 
+	// Build a deterministic chain so the mock client can serve headersRange.
+	h10 := &types.Header{Number: big.NewInt(10)}
+	h11 := &types.Header{Number: big.NewInt(11), ParentHash: h10.Hash()}
+	h12 := &types.Header{Number: big.NewInt(12), ParentHash: h11.Hash()}
+
 	client := &mockClient{
 		headerByNumberFunc: func(ctx context.Context, number *big.Int) (*types.Header, error) {
-			return &types.Header{
-				Number: big.NewInt(int64(finalizedBlockNum)),
-			}, nil
+			if number.Int64() == int64(rpc.FinalizedBlockNumber) {
+				return h10, nil
+			}
+			switch number.Uint64() {
+			case 10:
+				return h10, nil
+			case 11:
+				return h11, nil
+			case 12:
+				return h12, nil
+			}
+			return nil, nil
 		},
 		filterLogsFunc: func(ctx context.Context, q ethereum.FilterQuery) ([]types.Log, error) {
 			return nil, nil
 		},
 	}
 
-	handler := &mockHandler{
-		filter: Filter{FromBlock: 10},
-	}
+	filter := Filter{FromBlock: 10}
+	handler := &mockHandler{}
 
 	store := newMockStore()
-	indexer := NewIndexer(client, handler, store, nil)
-
-	if err := indexer.Init(ctx); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
 
 	// Save a finalized checkpoint so Process can recover from a reorg.
 	cp := checkpoint{
-		BlockNumber: indexer.head.Number,
-		BlockHash:   indexer.head.Hash,
-		State:       []byte("restored_state"),
+		Head:  BlockRef{Number: finalizedBlockNum, Hash: h10.Hash()},
+		State: []byte("restored_state"),
 	}
 	cpb, err := cp.MarshalBinary()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Save(finalizedCP, cpb); err != nil {
+	if err := store.Save(t.Context(), finalizedCheckpoint, cpb); err != nil {
 		t.Fatal(err)
 	}
 
+	indexer, err := NewIndexer(ctx, client, handler, filter, store, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
 	// Push a valid block.
-	h11 := &types.Header{Number: big.NewInt(11), ParentHash: indexer.head.Hash}
 	if err := indexer.Process(ctx, h11); err != nil {
 		t.Fatalf("process h11: %v", err)
 	}
@@ -154,11 +155,11 @@ func TestIndexer_Reorg(t *testing.T) {
 	handler.state = []byte("corrupted")
 
 	// Push a block with the wrong parent hash to trigger a reorg.
-	h12 := &types.Header{
+	h12Bad := &types.Header{
 		Number:     big.NewInt(12),
 		ParentHash: common.HexToHash("0xdeadbeef"), // mismatch
 	}
-	if err := indexer.Process(ctx, h12); err != nil {
+	if err := indexer.Process(ctx, h12Bad); err != nil {
 		t.Fatalf("process h12 after reorg: %v", err)
 	}
 
@@ -171,15 +172,69 @@ func TestIndexer_Reorg(t *testing.T) {
 	}
 }
 
+func TestIndexer_Progress(t *testing.T) {
+	ctx := t.Context()
+
+	finalizedBlockNum := uint64(100)
+
+	client := &mockClient{
+		headerByNumberFunc: func(ctx context.Context, number *big.Int) (*types.Header, error) {
+			if number.Int64() == int64(rpc.FinalizedBlockNumber) {
+				return &types.Header{
+					Number: big.NewInt(int64(finalizedBlockNum)),
+				}, nil
+			}
+			return nil, nil
+		},
+		filterLogsFunc: func(ctx context.Context, q ethereum.FilterQuery) ([]types.Log, error) {
+			// Slow each RPC call so the polling goroutine can observe progress
+			// mid-backfill (and exercise concurrent Progress reads under -race).
+			time.Sleep(10 * time.Millisecond)
+			var logs []types.Log
+			for i := q.FromBlock.Uint64(); i <= q.ToBlock.Uint64(); i++ {
+				logs = append(logs, types.Log{BlockNumber: i})
+			}
+			return logs, nil
+		},
+	}
+
+	filter := Filter{FromBlock: 50}
+	handler := &mockHandler{}
+
+	var lastProgress Progress
+	progress := make(chan Progress)
+	done := make(chan struct{})
+
+	go func() {
+		for p := range progress {
+			lastProgress = p
+		}
+		close(done)
+	}()
+
+	_, err := NewIndexer(ctx, client, handler, filter, newMockStore(), &Config{ProgressCh: progress})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	close(progress)
+	<-done
+
+	if lastProgress.EndBlock != finalizedBlockNum {
+		t.Errorf("expected end block %d, got %d", finalizedBlockNum, lastProgress.EndBlock)
+	}
+	if lastProgress.CurrentBlock != finalizedBlockNum {
+		t.Errorf("expected current block %d, got %d", finalizedBlockNum, lastProgress.CurrentBlock)
+	}
+}
+
 func TestIndexer_Restore(t *testing.T) {
 	ctx := t.Context()
 
 	finalizedBlockNum := uint64(50)
 
 	cp := checkpoint{
-		BlockNumber: 50,
-		BlockHash:   common.HexToHash("0x123"),
-		State:       []byte("restored_state"),
+		Head:  BlockRef{Number: 50, Hash: common.HexToHash("0x123")},
+		State: []byte("restored_state"),
 	}
 	cpb, err := cp.MarshalBinary()
 	if err != nil {
@@ -187,7 +242,7 @@ func TestIndexer_Restore(t *testing.T) {
 	}
 
 	store := newMockStore()
-	store.Save(finalizedCP, cpb)
+	store.Save(t.Context(), finalizedCheckpoint, cpb)
 
 	client := &mockClient{
 		headerByNumberFunc: func(ctx context.Context, number *big.Int) (*types.Header, error) {
@@ -198,21 +253,13 @@ func TestIndexer_Restore(t *testing.T) {
 		filterLogsFunc: func(ctx context.Context, q ethereum.FilterQuery) ([]types.Log, error) {
 			return nil, nil
 		},
-		// subscribeNewHeadFunc: func(ctx context.Context, ch chan<- *types.Header) (ethereum.Subscription, error) {
-		// 	sub := newMockSubscription()
-		// 	go func() { sub.errCh <- context.Canceled }()
-		// 	return sub, nil
-		// },
 	}
 
-	handler := &mockHandler{
-		filter: Filter{FromBlock: 10},
-	}
+	filter := Filter{FromBlock: 10}
+	handler := &mockHandler{}
 
-	indexer := NewIndexer(client, handler, store, nil)
-
-	err = indexer.Init(ctx)
-	if err != nil && err != context.Canceled {
+	indexer, err := NewIndexer(ctx, client, handler, filter, store, nil)
+	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 

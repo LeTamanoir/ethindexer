@@ -1,7 +1,7 @@
 package ethindex
 
 import (
-	"fmt"
+	"context"
 	"io"
 	"math/big"
 	"os"
@@ -9,7 +9,7 @@ import (
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/crypto"
+	"golang.org/x/sync/errgroup"
 )
 
 func atomicWrite(filename string, write func(io.Writer) error) error {
@@ -43,46 +43,35 @@ func newFilterQuery(f Filter, from, to uint64) ethereum.FilterQuery {
 	}
 }
 
-func logsKey(q ethereum.FilterQuery) string {
-	var parts [][]byte
-
-	for _, a := range q.Addresses {
-		parts = append(parts, a[:])
+func chunkBlockRange(from, to, size uint64) []struct{ from, to uint64 } {
+	var chunks []struct{ from, to uint64 }
+	for start := from; start <= to; start += size {
+		end := min(start+size-1, to)
+		chunks = append(chunks, struct {
+			from uint64
+			to   uint64
+		}{start, end})
 	}
-	for _, tt := range q.Topics {
-		for _, t := range tt {
-			parts = append(parts, t[:])
-		}
-	}
-
-	hash := crypto.Keccak256Hash(parts...)
-
-	return fmt.Sprintf("logs-%d-%d-%s", q.FromBlock, q.ToBlock, hash)
+	return chunks
 }
 
-func loadCachedLogs(s Store, q ethereum.FilterQuery) ([]types.Log, error) {
-	b, err := s.Load(logsKey(q))
-	if err != nil {
-		return nil, fmt.Errorf("load logs: %w", err)
-	}
-	if len(b) == 0 {
-		return nil, nil
+func headersRange(ctx context.Context, c Client, from, to uint64) ([]*types.Header, error) {
+	total := to - from + 1
+
+	heads := make([]*types.Header, total)
+	eg, ctx := errgroup.WithContext(ctx)
+
+	for i := range total {
+		eg.Go(func() error {
+			h, e := c.HeaderByNumber(ctx, big.NewInt(int64(from+i)))
+			heads[i] = h
+			return e
+		})
 	}
 
-	var logs Logs
-	if err := logs.UnmarshalBinary(b); err != nil {
-		return nil, fmt.Errorf("unmarshal logs: %w", err)
+	if err := eg.Wait(); err != nil {
+		return nil, err
 	}
-	return logs, nil
-}
 
-func saveCachedLogs(s Store, q ethereum.FilterQuery, logs []types.Log) error {
-	b, err := Logs(logs).MarshalBinary()
-	if err != nil {
-		return fmt.Errorf("marshal logs: %w", err)
-	}
-	if err := s.Save(logsKey(q), b); err != nil {
-		return fmt.Errorf("save logs: %w", err)
-	}
-	return nil
+	return heads, nil
 }

@@ -31,8 +31,14 @@ if err != nil {
 	log.Fatal(err)
 }
 
-idx := ethindex.NewIndexer(client, myHandler, store, nil)
-if err := idx.Init(ctx); err != nil {
+filter := ethindex.Filter{
+	FromBlock: 18_000_000,
+	Addresses: []common.Address{contractAddr},
+	Topics:    [][]common.Hash{{eventTopic}},
+}
+
+idx, err := ethindex.NewIndexer(ctx, client, myHandler, filter, store, nil)
+if err != nil {
 	log.Fatal(err)
 }
 
@@ -59,10 +65,9 @@ Implement `Handler` with your indexing logic:
 
 ```go
 type Handler interface {
-	Filter() Filter
 	Process(context.Context, []types.Log) error
-	Snapshot() ([]byte, error)
-	Restore([]byte) error
+	Snapshot(context.Context) ([]byte, error)
+	Restore(context.Context, []byte) error
 }
 ```
 
@@ -74,6 +79,7 @@ See [`examples/weth`](examples/weth) for a full example.
 | --------------- | ------- | -------------------------------------------- |
 | `MaxBlockRange` | 10,000  | Max blocks per `eth_getLogs` request         |
 | `FinalityDepth` | 64      | Blocks before a dangling checkpoint is finalized |
+| `ProgressCh`    | `nil`   | Channel to receive backfill progress updates |
 
 `Filter.FromBlock` is the start block on a fresh run; ignored once a
 checkpoint exists.
@@ -91,11 +97,35 @@ S ------------------------ F --------- o --------- H
                             *
 ```
 
-`Init` restores the finalized checkpoint, backfills to the node's current
+`NewIndexer` restores the finalized checkpoint, backfills to the node's current
 finalized block (caching log batches on disk), then returns. `Process` checks
 each header's parent hash; on mismatch it rolls back to the last finalized
 checkpoint and re-indexes the divergent range, so reorgs are handled
 transparently.
+
+## Observing progress
+
+`NewIndexer` blocks during backfill, which can take a long time on a fresh run.
+Pass a `ProgressCh` in `Config` to receive a best-effort snapshot on each chunk:
+
+```go
+progress := make(chan ethindex.Progress)
+go func() {
+	for p := range progress {
+		log.Printf("backfill %d/%d blocks (%.2f%%)", p.CurrentBlock, p.EndBlock, p.Percent())
+	}
+}()
+
+idx, err := ethindex.NewIndexer(ctx, client, myHandler, filter, store, &ethindex.Config{
+	ProgressCh: progress,
+})
+if err != nil {
+	log.Fatal(err)
+}
+close(progress)
+```
+
+`Progress` is safe to read concurrently with `NewIndexer`.
 
 ## Development
 

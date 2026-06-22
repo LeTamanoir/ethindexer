@@ -54,7 +54,6 @@ func (m *mockClient) FilterLogs(ctx context.Context, q ethereum.FilterQuery) ([]
 
 type mockHandler struct {
 	mu          sync.Mutex
-	filter      Filter
 	processed   []types.Log
 	state       []byte
 	processErr  error
@@ -62,21 +61,17 @@ type mockHandler struct {
 	restoreErr  error
 }
 
-func (m *mockHandler) Snapshot() ([]byte, error) {
+func (m *mockHandler) Snapshot(context.Context) ([]byte, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.state, m.snapshotErr
 }
 
-func (m *mockHandler) Restore(state []byte) error {
+func (m *mockHandler) Restore(_ context.Context, state []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.state = state
 	return m.restoreErr
-}
-
-func (m *mockHandler) Filter() Filter {
-	return m.filter
 }
 
 func (m *mockHandler) Process(ctx context.Context, logs []types.Log) error {
@@ -100,7 +95,7 @@ func newMockStore() *mockStore {
 	}
 }
 
-func (m *mockStore) Load(name string) ([]byte, error) {
+func (m *mockStore) Load(_ context.Context, name string) ([]byte, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	val, ok := m.store[name]
@@ -110,14 +105,14 @@ func (m *mockStore) Load(name string) ([]byte, error) {
 	return val, nil
 }
 
-func (m *mockStore) Save(name string, data []byte) error {
+func (m *mockStore) Save(_ context.Context, name string, data []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.store[name] = data
 	return nil
 }
 
-func (m *mockStore) Delete(name string) error {
+func (m *mockStore) Delete(_ context.Context, name string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.store, name)

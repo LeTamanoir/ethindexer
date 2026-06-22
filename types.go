@@ -9,6 +9,23 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 )
 
+// Progress is a best-effort snapshot of an in-progress backfill.
+type Progress struct {
+	StartBlock   uint64
+	CurrentBlock uint64
+	EndBlock     uint64
+}
+
+// Percent returns the progress as a percentage of blocks processed relative
+// to the total backfill range (EndBlock - StartBlock).
+func (p Progress) Percent() float64 {
+	total := p.EndBlock - p.StartBlock
+	if total == 0 {
+		return 0
+	}
+	return float64(p.CurrentBlock-p.StartBlock) / float64(total) * 100.0
+}
+
 // Filter specifies the Ethereum logs to fetch during indexing.
 type Filter struct {
 	// FromBlock is the first block included in the initial backfill.
@@ -26,13 +43,10 @@ type Filter struct {
 // Handler defines the application-specific indexing logic.
 type Handler interface {
 	// Snapshot returns the current handler state for checkpointing.
-	Snapshot() ([]byte, error)
+	Snapshot(context.Context) ([]byte, error)
 
 	// Restore restores the handler state from a checkpoint snapshot.
-	Restore([]byte) error
-
-	// Filter returns the log filter used during indexing.
-	Filter() Filter
+	Restore(context.Context, []byte) error
 
 	// Process processes matching logs in block order.
 	Process(context.Context, []types.Log) error
@@ -53,16 +67,19 @@ type Config struct {
 	// FinalityDepth is the block depth considered finalized.
 	// The default is 64.
 	FinalityDepth uint64
+
+	// ProgressCh is used to track indexer progress when backfilling
+	ProgressCh chan Progress
 }
 
 // Store defines the persistence methods used by the indexer.
 type Store interface {
 	// Load returns the data stored under key.
-	Load(key string) ([]byte, error)
+	Load(ctx context.Context, key string) ([]byte, error)
 
 	// Save stores data under key, replacing any existing value.
-	Save(key string, data []byte) error
+	Save(ctx context.Context, key string, data []byte) error
 
 	// Delete removes the data stored under key.
-	Delete(key string) error
+	Delete(ctx context.Context, key string) error
 }

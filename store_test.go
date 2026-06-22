@@ -14,11 +14,11 @@ func TestFileStore_SaveLoad(t *testing.T) {
 	}
 
 	data := []byte("hello world")
-	if err := store.Save("testkey", data); err != nil {
+	if err := store.Save(t.Context(), "testkey", data); err != nil {
 		t.Fatalf("failed to save: %v", err)
 	}
 
-	loaded, err := store.Load("testkey")
+	loaded, err := store.Load(t.Context(), "testkey")
 	if err != nil {
 		t.Fatalf("failed to load: %v", err)
 	}
@@ -37,15 +37,15 @@ func TestFileStore_Delete(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := store.Save("testkey", []byte("hello")); err != nil {
+	if err := store.Save(t.Context(), "testkey", []byte("hello")); err != nil {
 		t.Fatalf("failed to save: %v", err)
 	}
 
-	if err := store.Delete("testkey"); err != nil {
+	if err := store.Delete(t.Context(), "testkey"); err != nil {
 		t.Fatalf("failed to delete: %v", err)
 	}
 
-	loaded, err := store.Load("testkey")
+	loaded, err := store.Load(t.Context(), "testkey")
 	if err != nil {
 		t.Fatalf("unexpected error loading deleted key: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestFileStore_LoadNotFound(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	loaded, err := store.Load("missingkey")
+	loaded, err := store.Load(t.Context(), "missingkey")
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestFileStore_DeleteMissing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := store.Delete("missingkey"); err != nil {
+	if err := store.Delete(t.Context(), "missingkey"); err != nil {
 		t.Errorf("expected no error deleting missing key, got: %v", err)
 	}
 }
