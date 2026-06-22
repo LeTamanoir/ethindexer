@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -34,6 +35,10 @@ type Indexer struct {
 	dangling    *BlockRef
 	head        *BlockRef
 	initialized bool
+
+	// progress is updated during backfill and read via Progress().
+	progressMu sync.Mutex
+	progress   Progress
 }
 
 // New creates a new indexer instance
@@ -58,6 +63,14 @@ func NewIndexer(c Client, h Handler, s Store, cfg *Config) *Indexer {
 		maxBlockRange: maxBlockRange,
 		finalityDepth: finalityDepth,
 	}
+}
+
+// Progress returns a best-effort snapshot of the current backfill.
+// It is safe to call concurrently with Init.
+func (idx *Indexer) Progress() Progress {
+	idx.progressMu.Lock()
+	defer idx.progressMu.Unlock()
+	return idx.progress
 }
 
 // Init starts the indexer
@@ -154,6 +167,10 @@ func (idx *Indexer) processRange(ctx context.Context, from, to uint64) error {
 		panic(fmt.Errorf("invalid block range: from (%d) > to (%d)", from, to))
 	}
 
+	idx.progressMu.Lock()
+	idx.progress = Progress{ToBlock: to}
+	idx.progressMu.Unlock()
+
 	for start := from; start <= to; start += uint64(idx.maxBlockRange) {
 		end := min(start+uint64(idx.maxBlockRange)-1, to)
 
@@ -169,6 +186,10 @@ func (idx *Indexer) processRange(ctx context.Context, from, to uint64) error {
 		if err := idx.h.Process(ctx, logs); err != nil {
 			return fmt.Errorf("process logs: %w", err)
 		}
+
+		idx.progressMu.Lock()
+		idx.progress.CurrentBlock = end
+		idx.progressMu.Unlock()
 	}
 
 	return nil

@@ -3,7 +3,9 @@ package ethindex
 import (
 	"context"
 	"math/big"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
@@ -168,6 +170,66 @@ func TestIndexer_Reorg(t *testing.T) {
 
 	if indexer.head.Number != 12 {
 		t.Errorf("expected head to be 12 after reorg recovery, got %d", indexer.head.Number)
+	}
+}
+
+func TestIndexer_Progress(t *testing.T) {
+	ctx := t.Context()
+
+	finalizedBlockNum := uint64(100)
+
+	client := &mockClient{
+		headerByNumberFunc: func(ctx context.Context, number *big.Int) (*types.Header, error) {
+			if number.Int64() == int64(rpc.FinalizedBlockNumber) {
+				return &types.Header{
+					Number: big.NewInt(int64(finalizedBlockNum)),
+				}, nil
+			}
+			return nil, nil
+		},
+		filterLogsFunc: func(ctx context.Context, q ethereum.FilterQuery) ([]types.Log, error) {
+			// Slow each RPC call so the polling goroutine can observe progress
+			// mid-backfill (and exercise concurrent Progress reads under -race).
+			time.Sleep(10 * time.Millisecond)
+			var logs []types.Log
+			for i := q.FromBlock.Uint64(); i <= q.ToBlock.Uint64(); i++ {
+				logs = append(logs, types.Log{BlockNumber: i})
+			}
+			return logs, nil
+		},
+	}
+
+	handler := &mockHandler{
+		filter: Filter{FromBlock: 50},
+	}
+
+	indexer := NewIndexer(client, handler, newMockStore(), nil)
+
+	// Poll Progress concurrently with Init to verify it is race-free.
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			p := indexer.Progress()
+			if p.ToBlock > 0 && p.CurrentBlock == p.ToBlock {
+				return
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
+	}()
+
+	if err := indexer.Init(ctx); err != nil && err != context.Canceled {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	wg.Wait()
+
+	p := indexer.Progress()
+	if p.ToBlock != finalizedBlockNum {
+		t.Errorf("expected to block %d, got %d", finalizedBlockNum, p.ToBlock)
+	}
+	if p.CurrentBlock != finalizedBlockNum {
+		t.Errorf("expected current block %d, got %d", finalizedBlockNum, p.CurrentBlock)
 	}
 }
 

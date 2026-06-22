@@ -9,6 +9,15 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 )
 
+// Progress is a best-effort snapshot of an in-progress backfill.
+// It is safe to call [Indexer.Progress] concurrently with [Indexer.Init].
+type Progress struct {
+	// CurrentBlock is the highest block whose logs have been processed so far.
+	CurrentBlock uint64
+	// ToBlock is the target block of the current backfill.
+	ToBlock uint64
+}
+
 // Filter specifies the Ethereum logs to fetch during indexing.
 type Filter struct {
 	// FromBlock is the first block included in the initial backfill.

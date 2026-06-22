@@ -148,9 +148,36 @@ func run() error {
 	}
 
 	idx := ethindex.NewIndexer(httpClient, NewWETH(), store, nil)
+
+	// Poll backfill progress while Init runs. Init blocks during the initial
+	// sync (potentially long), so the reporting happens on a separate goroutine.
+	initDone := make(chan struct{})
+	go func() {
+		t := time.NewTicker(2 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-initDone:
+				return
+			case <-t.C:
+				p := idx.Progress()
+				if p.ToBlock == 0 {
+					continue
+				}
+				slog.Info("backfill progress",
+					"block", fmt.Sprintf("%d/%d", p.CurrentBlock, p.ToBlock),
+				)
+			}
+		}
+	}()
+
 	if err := idx.Init(ctx); err != nil {
+		close(initDone)
 		return fmt.Errorf("init: %w", err)
 	}
+	close(initDone)
 
 	heads := make(chan *types.Header, 128)
 	sub := event.Resubscribe(2*time.Second, func(ctx context.Context) (event.Subscription, error) {

@@ -97,6 +97,38 @@ each header's parent hash; on mismatch it rolls back to the last finalized
 checkpoint and re-indexes the divergent range, so reorgs are handled
 transparently.
 
+## Observing progress
+
+`Init` blocks during backfill, which can take a long time on a fresh run.
+Call `Progress` from another goroutine to get a best-effort snapshot:
+
+```go
+idx := ethindex.NewIndexer(client, myHandler, store, nil)
+
+go func() {
+	t := time.NewTicker(2 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			p := idx.Progress()
+			if p.ToBlock == 0 {
+				continue
+			}
+			log.Printf("backfill %d/%d blocks", p.CurrentBlock, p.ToBlock)
+		}
+	}
+}()
+
+if err := idx.Init(ctx); err != nil {
+	log.Fatal(err)
+}
+```
+
+`Progress` is safe to call concurrently with `Init`.
+
 ## Development
 
 ```bash
