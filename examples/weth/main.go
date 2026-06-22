@@ -145,8 +145,6 @@ func run() error {
 		return fmt.Errorf("create store: %w", err)
 	}
 
-	idx := ethindex.NewIndexer(httpClient, NewWETH(), wethFilter, store, nil)
-
 	progress := make(chan ethindex.Progress)
 	go func() {
 		for {
@@ -155,13 +153,14 @@ func run() error {
 				return
 			case p := <-progress:
 				slog.Info("backfill progress",
-					"block", fmt.Sprintf("%d/%d", p.CurrentBlock, p.ToBlock),
-					"percent", fmt.Sprintf("%%%.2f", float64(p.CurrentBlock)/float64(p.ToBlock)*100.0))
+					"block", fmt.Sprintf("%d/%d", p.CurrentBlock, p.EndBlock),
+					"percent", fmt.Sprintf("%%%.2f", p.Percent()))
 			}
 		}
 	}()
 
-	if err := idx.Init(ctx, progress); err != nil {
+	idx, err := ethindex.NewIndexer(ctx, httpClient, NewWETH(), wethFilter, store, &ethindex.Config{ProgressCh: progress})
+	if err != nil {
 		return fmt.Errorf("init: %w", err)
 	}
 	close(progress)

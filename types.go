@@ -16,6 +16,16 @@ type Progress struct {
 	EndBlock     uint64
 }
 
+// Percent returns the progress as a percentage of blocks processed relative
+// to the total backfill range (EndBlock - StartBlock).
+func (p Progress) Percent() float64 {
+	total := p.EndBlock - p.StartBlock
+	if total == 0 {
+		return 0
+	}
+	return float64(p.CurrentBlock-p.StartBlock) / float64(total) * 100.0
+}
+
 // Filter specifies the Ethereum logs to fetch during indexing.
 type Filter struct {
 	// FromBlock is the first block included in the initial backfill.

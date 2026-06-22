@@ -104,12 +104,12 @@ func (idx *Indexer) Process(ctx context.Context, h *types.Header) error {
 	inum := idx.head.Number
 	hnum := h.Number.Uint64()
 
-	if hnum < inum {
+	if hnum <= inum {
 		return fmt.Errorf("can not process old heads")
 	}
 
 	// Enforce we only process strictly sequential heads
-	if hnum != inum-1 {
+	if hnum != inum+1 {
 		heads, err := headersRange(ctx, idx.c, inum+1, hnum)
 		if err != nil {
 			return fmt.Errorf("headers range: %w", err)
