@@ -68,6 +68,11 @@ type Config struct {
 	// FinalityDepth is the block depth considered finalized.
 	// The default is 64.
 	FinalityDepth uint64
+
+	// MaxConcurrency bounds the number of concurrent RPC calls when
+	// fetching missing headers after a gap (e.g. on reconnect).
+	// The default is 16.
+	MaxConcurrency int
 }
 
 func (c *Config) Validate() error {
@@ -87,6 +92,9 @@ func (c *Config) Validate() error {
 	}
 	if c.MaxBlockRange == 0 {
 		c.MaxBlockRange = uint64(10_000)
+	}
+	if c.MaxConcurrency == 0 {
+		c.MaxConcurrency = 16
 	}
 	if c.Logger == nil {
 		c.Logger = slog.Default()
@@ -108,7 +116,4 @@ type Store interface {
 	// re-serializing the data; a filesystem rename is the canonical example.
 	// It is used to promote a dangling checkpoint to finalized.
 	Move(ctx context.Context, srcKey, dstKey string) error
-
-	// Delete removes the data stored under key.
-	Delete(ctx context.Context, key string) error
 }

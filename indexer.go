@@ -28,6 +28,7 @@ type Indexer struct {
 	// Configs
 	maxBlockRange uint64
 	finalityDepth uint64
+	maxConcurrent int
 
 	// State
 	head        BlockRef
@@ -58,11 +59,12 @@ func NewIndexer(ctx context.Context, cfg Config) (*Indexer, error) {
 
 		maxBlockRange: cfg.MaxBlockRange,
 		finalityDepth: cfg.FinalityDepth,
+		maxConcurrent: cfg.MaxConcurrency,
 	}
 
 	idx.l.Info("starting indexer", "from_block", cfg.Filter.FromBlock, "finality_depth", cfg.FinalityDepth, "max_block_range", cfg.MaxBlockRange)
 
-	cp, ok, err := loadFinalized(ctx, idx.s)
+	cp, ok, err := loadCheckpoint(ctx, idx.s, finalized)
 	if err != nil {
 		return nil, fmt.Errorf("load finalized: %w", err)
 	}
@@ -106,7 +108,7 @@ func NewIndexer(ctx context.Context, cfg Config) (*Indexer, error) {
 		snapDuration := time.Since(snapStart)
 
 		saveStart := time.Now()
-		if err := saveFinalized(ctx, idx.s, checkpoint{idx.head, state}); err != nil {
+		if err := saveCheckpoint(ctx, idx.s, finalized, checkpoint{idx.head, state}); err != nil {
 			return nil, fmt.Errorf("save finalized: %w", err)
 		}
 
@@ -135,7 +137,7 @@ func (idx *Indexer) Process(ctx context.Context, h *types.Header) error {
 	if hnum != inum+1 {
 		start := time.Now()
 
-		heads, err := headersRange(ctx, idx.c, inum+1, hnum)
+		heads, err := headersRange(ctx, idx.c, inum+1, hnum, idx.maxConcurrent)
 		if err != nil {
 			return fmt.Errorf("headers range: %w", err)
 		}
@@ -162,7 +164,7 @@ func (idx *Indexer) Process(ctx context.Context, h *types.Header) error {
 		idx.head = BlockRef{}
 		idx.dangling = BlockRef{}
 
-		cp, ok, err := loadFinalized(ctx, idx.s)
+		cp, ok, err := loadCheckpoint(ctx, idx.s, finalized)
 		if err != nil {
 			return fmt.Errorf("load finalized: %w", err)
 		}
@@ -218,8 +220,10 @@ func (idx *Indexer) Process(ctx context.Context, h *types.Header) error {
 		idx.pendingSave = saveCh
 		go func() {
 			saveStart := time.Now()
-			err := saveDangling(ctx, idx.s, cp)
-			if err == nil {
+			err := saveCheckpoint(ctx, idx.s, dangling, cp)
+			if err != nil {
+				idx.l.Error("async save dangling failed", "head", cp.Head.Number, "error", err, "save", time.Since(saveStart))
+			} else {
 				idx.l.Debug("saved dangling checkpoint", "head", cp.Head.Number, "snapshot", snapDuration, "save", time.Since(saveStart), "duration", time.Since(start))
 			}
 			saveCh <- err
@@ -235,7 +239,7 @@ func (idx *Indexer) Process(ctx context.Context, h *types.Header) error {
 
 		start := time.Now()
 
-		if err := idx.s.Move(ctx, danglingCheckpoint, finalizedCheckpoint); err != nil {
+		if err := idx.s.Move(ctx, string(dangling), string(finalized)); err != nil {
 			return fmt.Errorf("promote dangling to finalized: %w", err)
 		}
 

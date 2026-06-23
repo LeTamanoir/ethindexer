@@ -119,13 +119,6 @@ func (m *mockStore) Save(_ context.Context, name string, data []byte) error {
 	return nil
 }
 
-func (m *mockStore) Delete(_ context.Context, name string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	delete(m.store, name)
-	return nil
-}
-
 func (m *mockStore) Move(_ context.Context, srcKey, dstKey string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

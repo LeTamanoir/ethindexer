@@ -149,7 +149,7 @@ func TestIndexer_Promote(t *testing.T) {
 
 	// Head 13 >= dangling(11) + finalityDepth(2), so the dangling checkpoint
 	// at head 11 should have been promoted to finalized via Move.
-	cp, ok, err := loadFinalized(ctx, store)
+	cp, ok, err := loadCheckpoint(ctx, store, finalized)
 	if err != nil {
 		t.Fatalf("load finalized: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestIndexer_Promote(t *testing.T) {
 	}
 
 	// The dangling key should be gone after the move.
-	if d, err := store.Load(ctx, danglingCheckpoint); err != nil {
+	if d, err := store.Load(ctx, string(dangling)); err != nil {
 		t.Fatalf("unexpected error loading dangling: %v", err)
 	} else if d != nil {
 		t.Errorf("expected dangling checkpoint to be moved away, got %d bytes", len(d))
@@ -271,7 +271,7 @@ func TestIndexer_Reorg(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Save(t.Context(), finalizedCheckpoint, cpb); err != nil {
+	if err := store.Save(t.Context(), string(finalized), cpb); err != nil {
 		t.Fatal(err)
 	}
 
@@ -327,7 +327,7 @@ func TestIndexer_Restore(t *testing.T) {
 	}
 
 	store := newMockStore()
-	store.Save(t.Context(), finalizedCheckpoint, cpb)
+	store.Save(t.Context(), string(finalized), cpb)
 
 	client := &mockClient{
 		headerByNumberFunc: func(ctx context.Context, number *big.Int) (*types.Header, error) {

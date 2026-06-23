@@ -55,11 +55,13 @@ func chunkBlockRange(from, to, size uint64) []struct{ from, to uint64 } {
 	return chunks
 }
 
-func headersRange(ctx context.Context, c Client, from, to uint64) ([]*types.Header, error) {
+func headersRange(ctx context.Context, c Client, from, to uint64, maxConcurrency int) ([]*types.Header, error) {
 	total := to - from + 1
 
 	heads := make([]*types.Header, total)
 	eg, ctx := errgroup.WithContext(ctx)
+
+	eg.SetLimit(maxConcurrency)
 
 	for i := range total {
 		eg.Go(func() error {
