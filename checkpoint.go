@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding"
 	"encoding/binary"
-	"errors"
 	"fmt"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -43,27 +42,6 @@ func (c *checkpoint) UnmarshalBinary(b []byte) error {
 	c.Head.Number = binary.LittleEndian.Uint64(b)
 	c.Head.Hash.SetBytes(b[8 : 8+common.HashLength])
 	c.State = append(c.State, b[8+common.HashLength:]...)
-
-	return nil
-}
-
-func promoteDangling(ctx context.Context, s Store) error {
-	cpb, err := s.Load(ctx, danglingCheckpoint)
-	if err != nil {
-		return fmt.Errorf("store load: %w", err)
-	}
-	if len(cpb) == 0 {
-		return errors.New("dangling checkpoint missing from store")
-	}
-
-	var cp checkpoint
-	if err := cp.UnmarshalBinary(cpb); err != nil {
-		return fmt.Errorf("unmarshal: %w", err)
-	}
-
-	if err := s.Save(ctx, finalizedCheckpoint, cpb); err != nil {
-		return fmt.Errorf("store save: %w", err)
-	}
 
 	return nil
 }

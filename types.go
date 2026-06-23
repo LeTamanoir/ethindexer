@@ -103,6 +103,12 @@ type Store interface {
 	// Save stores data under key, replacing any existing value.
 	Save(ctx context.Context, key string, data []byte) error
 
+	// Move atomically renames the data from srcKey to dstKey, replacing any
+	// existing value under dstKey. Implementations should avoid
+	// re-serializing the data; a filesystem rename is the canonical example.
+	// It is used to promote a dangling checkpoint to finalized.
+	Move(ctx context.Context, srcKey, dstKey string) error
+
 	// Delete removes the data stored under key.
 	Delete(ctx context.Context, key string) error
 }

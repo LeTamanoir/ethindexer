@@ -2,6 +2,7 @@ package ethindex
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"math/big"
@@ -122,5 +123,17 @@ func (m *mockStore) Delete(_ context.Context, name string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.store, name)
+	return nil
+}
+
+func (m *mockStore) Move(_ context.Context, srcKey, dstKey string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	val, ok := m.store[srcKey]
+	if !ok {
+		return fmt.Errorf("move %q: not found", srcKey)
+	}
+	m.store[dstKey] = val
+	delete(m.store, srcKey)
 	return nil
 }

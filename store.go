@@ -66,3 +66,13 @@ func (s *FileStore) Delete(_ context.Context, key string) error {
 	}
 	return err
 }
+
+func (s *FileStore) Move(_ context.Context, srcKey, dstKey string) error {
+	if err := os.Rename(s.path(srcKey), s.path(dstKey)); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("move %q: %w", srcKey, err)
+		}
+		return fmt.Errorf("move %q to %q: %w", srcKey, dstKey, err)
+	}
+	return nil
+}

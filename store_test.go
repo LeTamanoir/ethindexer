@@ -85,3 +85,43 @@ func TestFileStore_DeleteMissing(t *testing.T) {
 		t.Errorf("expected no error deleting missing key, got: %v", err)
 	}
 }
+
+func TestFileStore_Move(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.Save(t.Context(), "src", []byte("hello")); err != nil {
+		t.Fatalf("failed to save: %v", err)
+	}
+
+	if err := store.Move(t.Context(), "src", "dst"); err != nil {
+		t.Fatalf("failed to move: %v", err)
+	}
+
+	loaded, err := store.Load(t.Context(), "dst")
+	if err != nil {
+		t.Fatalf("failed to load moved data: %v", err)
+	}
+	if string(loaded) != "hello" {
+		t.Errorf("expected %q, got %q", "hello", loaded)
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, "src.gz")); !os.IsNotExist(err) {
+		t.Errorf("expected source file to be removed, got error: %v", err)
+	}
+}
+
+func TestFileStore_MoveMissingSource(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.Move(t.Context(), "missing", "dst"); err == nil {
+		t.Fatal("expected error moving missing source, got nil")
+	}
+}
