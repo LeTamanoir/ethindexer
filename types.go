@@ -45,14 +45,20 @@ type Client interface {
 
 // Config configures the indexer.
 type Config struct {
+	// Client is the Ethereum RPC client used to fetch logs and headers.
 	Client Client
 
+	// Logger records operational messages.
+	// The default is [slog.Default].
 	Logger *slog.Logger
 
+	// Handler processes matching logs and manages checkpoint state.
 	Handler Handler
 
+	// Filter specifies which logs the indexer fetches from the client.
 	Filter Filter
 
+	// Store persists checkpoints and handler state.
 	Store Store
 
 	// MaxBlockRange is the maximum block span per backfill RPC call.
@@ -76,10 +82,10 @@ func (c *Config) Validate() error {
 	}
 
 	// Apply defaults
-	if c.FinalityDepth != 0 {
+	if c.FinalityDepth == 0 {
 		c.FinalityDepth = uint64(64)
 	}
-	if c.MaxBlockRange != 0 {
+	if c.MaxBlockRange == 0 {
 		c.MaxBlockRange = uint64(10_000)
 	}
 	if c.Logger == nil {
