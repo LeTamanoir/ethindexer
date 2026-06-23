@@ -189,61 +189,6 @@ func TestIndexer_Reorg(t *testing.T) {
 	}
 }
 
-// func TestIndexer_Progress(t *testing.T) {
-// 	ctx := t.Context()
-
-// 	finalizedBlockNum := uint64(100)
-
-// 	client := &mockClient{
-// 		headerByNumberFunc: func(ctx context.Context, number *big.Int) (*types.Header, error) {
-// 			if number.Int64() == int64(rpc.FinalizedBlockNumber) {
-// 				return &types.Header{
-// 					Number: big.NewInt(int64(finalizedBlockNum)),
-// 				}, nil
-// 			}
-// 			return nil, nil
-// 		},
-// 		filterLogsFunc: func(ctx context.Context, q ethereum.FilterQuery) ([]types.Log, error) {
-// 			// Slow each RPC call so the polling goroutine can observe progress
-// 			// mid-backfill (and exercise concurrent Progress reads under -race).
-// 			time.Sleep(10 * time.Millisecond)
-// 			var logs []types.Log
-// 			for i := q.FromBlock.Uint64(); i <= q.ToBlock.Uint64(); i++ {
-// 				logs = append(logs, types.Log{BlockNumber: i})
-// 			}
-// 			return logs, nil
-// 		},
-// 	}
-
-// filter := Filter{FromBlock: 50}
-// handler := &mockHandler{}
-
-// var lastProgress Progress
-// progress := make(chan Progress)
-// done := make(chan struct{})
-
-// go func() {
-// 	for p := range progress {
-// 		lastProgress = p
-// 	}
-// 	close(done)
-// }()
-
-// _, err := NewIndexer(ctx, client, handler, filter, newMockStore(), progress, nil)
-// if err != nil {
-// 	t.Fatalf("unexpected error: %v", err)
-// }
-// close(progress)
-// <-done
-
-// if lastProgress.EndBlock != finalizedBlockNum {
-// 	t.Errorf("expected end block %d, got %d", finalizedBlockNum, lastProgress.EndBlock)
-// }
-// if lastProgress.CurrentBlock != finalizedBlockNum {
-// 	t.Errorf("expected current block %d, got %d", finalizedBlockNum, lastProgress.CurrentBlock)
-// }
-// }
-
 func TestIndexer_Restore(t *testing.T) {
 	ctx := t.Context()
 
