@@ -8,17 +8,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/rpc"
 	"golang.org/x/sync/errgroup"
 )
 
-type BlockRef struct {
-	Number uint64
-	Hash   common.Hash
-}
-
+// Indexer indexes Ethereum logs from a finalized block onward, handling reorgs and checkpointing.
 type Indexer struct {
 	c Client
 	h Handler
@@ -99,7 +94,7 @@ func (idx *Indexer) restore(ctx context.Context) error {
 	return idx.applyCheckpoint(ctx, cp)
 }
 
-// syncToFinalized backfills from the restored head (or FromBlock on a fresh
+// sync backfills from the restored head (or FromBlock on a fresh
 // run) up to the node's finalized block, then saves a finalized checkpoint.
 func (idx *Indexer) sync(ctx context.Context) error {
 	start := time.Now()
@@ -149,7 +144,7 @@ func (idx *Indexer) sync(ctx context.Context) error {
 	return nil
 }
 
-// Process ingests a new head and handles gaps and reorgs.
+// process handles a single received head, dispatching to fillGap/handleReorg/processHead.
 func (idx *Indexer) process(ctx context.Context, h *types.Header) error {
 	idxNum := idx.head.Number
 	headNum := h.Number.Uint64()
@@ -238,7 +233,7 @@ func (idx *Indexer) handleReorg(ctx context.Context, h *types.Header) error {
 	return idx.process(ctx, h)
 }
 
-// applyRestoredCheckpoint applies the handler state from a checkpoint snapshot
+// applyCheckpoint applies the handler state from a checkpoint snapshot
 // and records the restored head.
 func (idx *Indexer) applyCheckpoint(ctx context.Context, cp *checkpoint) error {
 	start := time.Now()
@@ -405,7 +400,7 @@ func (idx *Indexer) logsRange(ctx context.Context, from, to uint64) ([]types.Log
 	return logs, nil
 }
 
-// Backfill fetches logs in chunks over [from, to] and processes them in order,
+// backfill fetches logs in chunks over [from, to] and processes them in order,
 // caching each chunk on disk so a restart can resume without re-fetching.
 func (idx *Indexer) backfill(ctx context.Context, from, to uint64) error {
 	chunks := chunkBlockRange(from, to, idx.maxBlockRange)

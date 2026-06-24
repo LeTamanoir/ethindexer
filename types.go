@@ -10,6 +10,12 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 )
 
+// BlockRef is a (number, hash) pair identifying a block.
+type BlockRef struct {
+	Number uint64
+	Hash   common.Hash
+}
+
 // Filter specifies the Ethereum logs to fetch during indexing.
 type Filter struct {
 	// FromBlock is the first block included in the initial backfill.
