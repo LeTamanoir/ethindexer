@@ -16,30 +16,6 @@ func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-type mockSubscription struct {
-	errCh   chan error
-	unsubCh chan struct{}
-}
-
-func newMockSubscription() *mockSubscription {
-	return &mockSubscription{
-		errCh:   make(chan error),
-		unsubCh: make(chan struct{}),
-	}
-}
-
-func (s *mockSubscription) Unsubscribe() {
-	select {
-	case <-s.unsubCh:
-	default:
-		close(s.unsubCh)
-	}
-}
-
-func (s *mockSubscription) Err() <-chan error {
-	return s.errCh
-}
-
 type mockClient struct {
 	headerByNumberFunc func(ctx context.Context, number *big.Int) (*types.Header, error)
 	filterLogsFunc     func(ctx context.Context, q ethereum.FilterQuery) ([]types.Log, error)
