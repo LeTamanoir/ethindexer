@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"time"
 
+	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/rpc"
@@ -125,6 +126,7 @@ func NewIndexer(ctx context.Context, cfg Config) (*Indexer, error) {
 func (idx *Indexer) Process(ctx context.Context, h *types.Header) error {
 	inum := idx.head.Number
 	hnum := h.Number.Uint64()
+	hhash := h.Hash()
 
 	if hnum <= inum {
 		idx.l.Warn("ignoring old head", "current", inum, "received", hnum)
@@ -186,7 +188,11 @@ func (idx *Indexer) Process(ctx context.Context, h *types.Header) error {
 
 	start := time.Now()
 
-	logs, err := idx.c.FilterLogs(ctx, newFilterQuery(idx.f, hnum, hnum))
+	logs, err := idx.c.FilterLogs(ctx, ethereum.FilterQuery{
+		BlockHash: &hhash,
+		Addresses: idx.f.Addresses,
+		Topics:    idx.f.Topics,
+	})
 	if err != nil {
 		return fmt.Errorf("get logs: %w", err)
 	}
@@ -260,7 +266,12 @@ func (idx *Indexer) backfill(ctx context.Context, from, to uint64) error {
 	for _, ch := range chunks {
 		chStart := time.Now()
 
-		logs, err := cachedFilterLogs(ctx, idx.c, idx.s, newFilterQuery(idx.f, ch.from, ch.to))
+		logs, err := cachedFilterLogs(ctx, idx.c, idx.s, ethereum.FilterQuery{
+			FromBlock: new(big.Int).SetUint64(ch.from),
+			ToBlock:   new(big.Int).SetUint64(ch.to),
+			Addresses: idx.f.Addresses,
+			Topics:    idx.f.Topics,
+		})
 		if err != nil {
 			return fmt.Errorf("get logs: %w", err)
 		}

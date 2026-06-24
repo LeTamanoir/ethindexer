@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/core/types"
 	"golang.org/x/sync/errgroup"
 )
@@ -32,15 +31,6 @@ func atomicWrite(filename string, write func(io.Writer) error) error {
 		return err
 	}
 	return os.Rename(f.Name(), filename)
-}
-
-func newFilterQuery(f Filter, from, to uint64) ethereum.FilterQuery {
-	return ethereum.FilterQuery{
-		FromBlock: new(big.Int).SetUint64(from),
-		ToBlock:   new(big.Int).SetUint64(to),
-		Addresses: f.Addresses,
-		Topics:    f.Topics,
-	}
 }
 
 type blockRange struct {
