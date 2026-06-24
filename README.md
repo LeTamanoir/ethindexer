@@ -78,15 +78,16 @@ See [`examples/weth`](examples/weth) for a full example.
 
 ## Config
 
-| Field           | Required | Default        | Description                                  |
-| --------------- | -------- | -------------- | -------------------------------------------- |
-| `Client`        | yes      |                | Ethereum RPC client                          |
-| `Handler`       | yes      |                | Indexing logic                               |
-| `Filter`        | yes      |                | Logs to fetch                                |
-| `Store`         | yes      |                | Checkpoint/state persistence                 |
-| `Logger`        | no       | `slog.Default` | Operational logger                           |
-| `MaxBlockRange` | no       | 10,000         | Max blocks per `eth_getLogs` request         |
-| `FinalityDepth` | no       | 64             | Blocks before a dangling checkpoint is finalized |
+| Field             | Required | Default        | Description                                  |
+| ----------------- | -------- | -------------- | -------------------------------------------- |
+| `Client`          | yes      |                | Ethereum RPC client                          |
+| `Handler`         | yes      |                | Indexing logic                               |
+| `Filter`          | yes      |                | Logs to fetch                                |
+| `Store`           | yes      |                | Checkpoint/state persistence                 |
+| `Logger`          | no       | `slog.Default` | Operational logger                           |
+| `MaxBlockRange`   | no       | 10,000         | Max blocks per `eth_getLogs` request         |
+| `FinalityDepth`   | no       | 64             | Blocks before a dangling checkpoint is finalized |
+| `MaxConcurrency`  | no       | 16             | Max concurrent RPC calls when filling header gaps |
 
 `Filter.FromBlock` is the start block on a fresh run; ignored once a
 checkpoint exists.

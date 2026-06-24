@@ -104,6 +104,129 @@ func TestIndexer_Live(t *testing.T) {
 	}
 }
 
+func TestIndexer_Promote(t *testing.T) {
+	ctx := t.Context()
+
+	finalizedBlockNum := uint64(10)
+
+	client := &mockClient{
+		headerByNumberFunc: func(ctx context.Context, number *big.Int) (*types.Header, error) {
+			return &types.Header{
+				Number: big.NewInt(int64(finalizedBlockNum)),
+			}, nil
+		},
+		filterLogsFunc: func(ctx context.Context, q ethereum.FilterQuery) ([]types.Log, error) {
+			return nil, nil
+		},
+	}
+
+	filter := Filter{FromBlock: 10}
+	handler := &mockHandler{}
+	store := newMockStore()
+
+	indexer, err := NewIndexer(ctx, Config{
+		Client:        client,
+		Handler:       handler,
+		Filter:        filter,
+		Store:         store,
+		Logger:        testLogger(),
+		FinalityDepth: 2,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Build a consecutive chain so no reorg is triggered.
+	h11 := &types.Header{Number: big.NewInt(11), ParentHash: indexer.head.Hash}
+	h12 := &types.Header{Number: big.NewInt(12), ParentHash: h11.Hash()}
+	h13 := &types.Header{Number: big.NewInt(13), ParentHash: h12.Hash()}
+
+	for _, h := range []*types.Header{h11, h12, h13} {
+		if err := indexer.Process(ctx, h); err != nil {
+			t.Fatalf("process head %d: %v", h.Number, err)
+		}
+	}
+
+	// Head 13 >= dangling(11) + finalityDepth(2), so the dangling checkpoint
+	// at head 11 should have been promoted to finalized via Move.
+	cp, ok, err := loadCheckpoint(ctx, store, finalized)
+	if err != nil {
+		t.Fatalf("load finalized: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected finalized checkpoint after promote")
+	}
+	if cp.Head.Number != 11 {
+		t.Errorf("expected finalized head 11 after promote, got %d", cp.Head.Number)
+	}
+
+	// The dangling key should be gone after the move.
+	if d, err := store.Load(ctx, string(dangling)); err != nil {
+		t.Fatalf("unexpected error loading dangling: %v", err)
+	} else if d != nil {
+		t.Errorf("expected dangling checkpoint to be moved away, got %d bytes", len(d))
+	}
+
+	if indexer.dangling != (BlockRef{}) {
+		t.Errorf("expected dangling to be reset after promote, got %d", indexer.dangling.Number)
+	}
+}
+
+// TestIndexer_PromoteGuardNoDangling verifies that the promote check does
+// not fire when idx.dangling is zero, even if head.Number >= finalityDepth.
+// This is the crash scenario from examples/logs.txt line 117.
+func TestIndexer_PromoteGuardNoDangling(t *testing.T) {
+	ctx := t.Context()
+
+	finalizedBlockNum := uint64(100)
+
+	client := &mockClient{
+		headerByNumberFunc: func(ctx context.Context, number *big.Int) (*types.Header, error) {
+			return &types.Header{
+				Number: big.NewInt(int64(finalizedBlockNum)),
+			}, nil
+		},
+		filterLogsFunc: func(ctx context.Context, q ethereum.FilterQuery) ([]types.Log, error) {
+			return nil, nil
+		},
+	}
+
+	filter := Filter{FromBlock: 100}
+	handler := &mockHandler{}
+	store := newMockStore()
+
+	indexer, err := NewIndexer(ctx, Config{
+		Client:        client,
+		Handler:       handler,
+		Filter:        filter,
+		Store:         store,
+		Logger:        testLogger(),
+		FinalityDepth: 2,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Simulate dangling being empty (e.g. after a restart that didn't
+	// restore it) while head is well past finalityDepth. The promote check
+	// must be a no-op, not a crash.
+	indexer.dangling = BlockRef{}
+	indexer.head = BlockRef{Number: 200, Hash: common.HexToHash("0xabc")}
+
+	h201 := &types.Header{Number: big.NewInt(201), ParentHash: indexer.head.Hash}
+
+	// This should NOT crash with "dangling checkpoint missing from store".
+	if err := indexer.Process(ctx, h201); err != nil {
+		t.Fatalf("unexpected error from promote guard: %v", err)
+	}
+
+	// After processing, a new dangling checkpoint should have been saved
+	// (since dangling was empty), and no promote should have fired.
+	if indexer.dangling == (BlockRef{}) {
+		t.Error("expected dangling to be set after processing with empty dangling")
+	}
+}
+
 func TestIndexer_Reorg(t *testing.T) {
 	ctx := t.Context()
 
@@ -148,7 +271,7 @@ func TestIndexer_Reorg(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Save(t.Context(), finalizedCheckpoint, cpb); err != nil {
+	if err := store.Save(t.Context(), string(finalized), cpb); err != nil {
 		t.Fatal(err)
 	}
 
@@ -204,7 +327,7 @@ func TestIndexer_Restore(t *testing.T) {
 	}
 
 	store := newMockStore()
-	store.Save(t.Context(), finalizedCheckpoint, cpb)
+	store.Save(t.Context(), string(finalized), cpb)
 
 	client := &mockClient{
 		headerByNumberFunc: func(ctx context.Context, number *big.Int) (*types.Header, error) {

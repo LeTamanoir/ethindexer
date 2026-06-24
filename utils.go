@@ -43,23 +43,27 @@ func newFilterQuery(f Filter, from, to uint64) ethereum.FilterQuery {
 	}
 }
 
-func chunkBlockRange(from, to, size uint64) []struct{ from, to uint64 } {
-	var chunks []struct{ from, to uint64 }
+type blockRange struct {
+	from uint64
+	to   uint64
+}
+
+func chunkBlockRange(from, to, size uint64) []blockRange {
+	var chunks []blockRange
 	for start := from; start <= to; start += size {
 		end := min(start+size-1, to)
-		chunks = append(chunks, struct {
-			from uint64
-			to   uint64
-		}{start, end})
+		chunks = append(chunks, blockRange{start, end})
 	}
 	return chunks
 }
 
-func headersRange(ctx context.Context, c Client, from, to uint64) ([]*types.Header, error) {
+func headersRange(ctx context.Context, c Client, from, to uint64, maxConcurrency int) ([]*types.Header, error) {
 	total := to - from + 1
 
 	heads := make([]*types.Header, total)
 	eg, ctx := errgroup.WithContext(ctx)
+
+	eg.SetLimit(maxConcurrency)
 
 	for i := range total {
 		eg.Go(func() error {
@@ -75,3 +79,12 @@ func headersRange(ctx context.Context, c Client, from, to uint64) ([]*types.Head
 
 	return heads, nil
 }
+
+type noopLogger struct{}
+
+var _ Logger = (*noopLogger)(nil)
+
+func (noopLogger) Debug(string, ...any) {}
+func (noopLogger) Info(string, ...any)  {}
+func (noopLogger) Warn(string, ...any)  {}
+func (noopLogger) Error(string, ...any) {}

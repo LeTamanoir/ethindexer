@@ -10,9 +10,11 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
+type checkpointKind string
+
 const (
-	finalizedCheckpoint = "checkpoint-finalized"
-	danglingCheckpoint  = "checkpoint-dangling"
+	finalized checkpointKind = "checkpoint-finalized"
+	dangling  checkpointKind = "checkpoint-dangling"
 )
 
 type checkpoint struct {
@@ -20,7 +22,7 @@ type checkpoint struct {
 	State []byte
 }
 
-var errInvalidCheckpoint = fmt.Errorf("invalid checkpoint")
+var errInvalidCheckpoint = errors.New("invalid checkpoint")
 
 var _ encoding.BinaryUnmarshaler = (*checkpoint)(nil)
 var _ encoding.BinaryMarshaler = (*checkpoint)(nil)
@@ -47,55 +49,21 @@ func (c *checkpoint) UnmarshalBinary(b []byte) error {
 	return nil
 }
 
-func promoteDangling(ctx context.Context, s Store) error {
-	cpb, err := s.Load(ctx, danglingCheckpoint)
-	if err != nil {
-		return fmt.Errorf("store load: %w", err)
-	}
-	if len(cpb) == 0 {
-		return errors.New("dangling checkpoint missing from store")
-	}
-
-	var cp checkpoint
-	if err := cp.UnmarshalBinary(cpb); err != nil {
-		return fmt.Errorf("unmarshal: %w", err)
-	}
-
-	if err := s.Save(ctx, finalizedCheckpoint, cpb); err != nil {
-		return fmt.Errorf("store save: %w", err)
-	}
-
-	return nil
-}
-
-func saveDangling(ctx context.Context, s Store, cp checkpoint) error {
+func saveCheckpoint(ctx context.Context, s Store, k checkpointKind, cp checkpoint) error {
 	cpb, err := cp.MarshalBinary()
 	if err != nil {
 		return fmt.Errorf("marshal: %w", err)
 	}
 
-	if err := s.Save(ctx, danglingCheckpoint, cpb); err != nil {
+	if err := s.Save(ctx, string(k), cpb); err != nil {
 		return fmt.Errorf("store save: %w", err)
 	}
 
 	return nil
 }
 
-func saveFinalized(ctx context.Context, s Store, cp checkpoint) error {
-	cpb, err := cp.MarshalBinary()
-	if err != nil {
-		return fmt.Errorf("marshal: %w", err)
-	}
-
-	if err := s.Save(ctx, finalizedCheckpoint, cpb); err != nil {
-		return fmt.Errorf("store save: %w", err)
-	}
-
-	return nil
-}
-
-func loadFinalized(ctx context.Context, s Store) (*checkpoint, bool, error) {
-	cpb, err := s.Load(ctx, finalizedCheckpoint)
+func loadCheckpoint(ctx context.Context, s Store, k checkpointKind) (*checkpoint, bool, error) {
+	cpb, err := s.Load(ctx, string(k))
 	if err != nil {
 		return nil, false, fmt.Errorf("store load: %w", err)
 	}

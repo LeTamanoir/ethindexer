@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding"
 	"encoding/binary"
+	"errors"
 	"fmt"
 
 	"github.com/ethereum/go-ethereum"
@@ -14,7 +15,7 @@ import (
 
 type Logs []types.Log
 
-var errInvalidLogs = fmt.Errorf("invalid logs")
+var errInvalidLogs = errors.New("invalid logs")
 
 var _ encoding.BinaryMarshaler = (*Logs)(nil)
 var _ encoding.BinaryUnmarshaler = (*Logs)(nil)

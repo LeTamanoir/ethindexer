@@ -2,6 +2,7 @@ package ethindex
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"math/big"
@@ -13,30 +14,6 @@ import (
 
 func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
-}
-
-type mockSubscription struct {
-	errCh   chan error
-	unsubCh chan struct{}
-}
-
-func newMockSubscription() *mockSubscription {
-	return &mockSubscription{
-		errCh:   make(chan error),
-		unsubCh: make(chan struct{}),
-	}
-}
-
-func (s *mockSubscription) Unsubscribe() {
-	select {
-	case <-s.unsubCh:
-	default:
-		close(s.unsubCh)
-	}
-}
-
-func (s *mockSubscription) Err() <-chan error {
-	return s.errCh
 }
 
 type mockClient struct {
@@ -118,9 +95,14 @@ func (m *mockStore) Save(_ context.Context, name string, data []byte) error {
 	return nil
 }
 
-func (m *mockStore) Delete(_ context.Context, name string) error {
+func (m *mockStore) Move(_ context.Context, srcKey, dstKey string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	delete(m.store, name)
+	val, ok := m.store[srcKey]
+	if !ok {
+		return fmt.Errorf("move %q: not found", srcKey)
+	}
+	m.store[dstKey] = val
+	delete(m.store, srcKey)
 	return nil
 }

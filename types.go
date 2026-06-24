@@ -3,7 +3,6 @@ package ethindex
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum"
@@ -43,14 +42,20 @@ type Client interface {
 	HeaderByNumber(context.Context, *big.Int) (*types.Header, error)
 }
 
+type Logger interface {
+	Debug(msg string, args ...any)
+	Info(msg string, args ...any)
+	Warn(msg string, args ...any)
+	Error(msg string, args ...any)
+}
+
 // Config configures the indexer.
 type Config struct {
 	// Client is the Ethereum RPC client used to fetch logs and headers.
 	Client Client
 
 	// Logger records operational messages.
-	// The default is [slog.Default].
-	Logger *slog.Logger
+	Logger Logger
 
 	// Handler processes matching logs and manages checkpoint state.
 	Handler Handler
@@ -68,6 +73,11 @@ type Config struct {
 	// FinalityDepth is the block depth considered finalized.
 	// The default is 64.
 	FinalityDepth uint64
+
+	// MaxConcurrency bounds the number of concurrent RPC calls when
+	// fetching missing headers after a gap (e.g. on reconnect).
+	// The default is 16.
+	MaxConcurrency int
 }
 
 func (c *Config) Validate() error {
@@ -83,13 +93,16 @@ func (c *Config) Validate() error {
 
 	// Apply defaults
 	if c.FinalityDepth == 0 {
-		c.FinalityDepth = uint64(64)
+		c.FinalityDepth = 64
 	}
 	if c.MaxBlockRange == 0 {
-		c.MaxBlockRange = uint64(10_000)
+		c.MaxBlockRange = 10_000
+	}
+	if c.MaxConcurrency == 0 {
+		c.MaxConcurrency = 16
 	}
 	if c.Logger == nil {
-		c.Logger = slog.Default()
+		c.Logger = noopLogger{}
 	}
 
 	return nil
@@ -103,6 +116,9 @@ type Store interface {
 	// Save stores data under key, replacing any existing value.
 	Save(ctx context.Context, key string, data []byte) error
 
-	// Delete removes the data stored under key.
-	Delete(ctx context.Context, key string) error
+	// Move atomically renames the data from srcKey to dstKey, replacing any
+	// existing value under dstKey. Implementations should avoid
+	// re-serializing the data; a filesystem rename is the canonical example.
+	// It is used to promote a dangling checkpoint to finalized.
+	Move(ctx context.Context, srcKey, dstKey string) error
 }
