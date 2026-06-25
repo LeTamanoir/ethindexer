@@ -24,6 +24,7 @@ const (
 type Indexer struct {
 	c Client
 	h Handler
+	f Filter
 	l Logger
 	s Store
 
@@ -31,19 +32,20 @@ type Indexer struct {
 	maxBlockRange uint64
 	maxConcurrent int
 
-	state       atomic.Uint32 // none -> syncing -> idling -> processing -> idle
+	state       atomic.Uint32 // none -> syncing -> idling -> processing -> idling
 	head        BlockRef
 	dangling    BlockRef   // head of the pending dangling checkpoint
 	pendingSave chan error // delivers the pending dangling save result
 }
 
-// NewIndexer builds the indexer, restores the finalized checkpoint, backfills
-// to the node's current finalized block, and saves a fresh finalized checkpoint.
-func NewIndexer(c Client, h Handler, s Store, l Logger, cfg Config) *Indexer {
+// NewIndexer builds the indexer. Call [Indexer.Sync] to restore the finalized
+// checkpoint and backfill to the node's current finalized block.
+func NewIndexer(c Client, h Handler, f Filter, s Store, l Logger, cfg Config) *Indexer {
 	cfg.applyDefaults()
 	return &Indexer{
 		c: c,
 		h: h,
+		f: f,
 		s: s,
 		l: l,
 
@@ -59,8 +61,8 @@ func (i *Indexer) Sync(ctx context.Context) error {
 		panic("Sync called more than once")
 	}
 
-	i.info("syncing indexer",
-		"from_block", i.h.Filter().FromBlock,
+	i.info("Syncing indexer",
+		"from_block", i.f.FromBlock,
 		"finality_depth", i.finalityDepth,
 		"max_block_range", i.maxBlockRange)
 
@@ -82,7 +84,7 @@ func (i *Indexer) Sync(ctx context.Context) error {
 // Process ingests a new head and handles gaps and reorgs.
 func (i *Indexer) Process(ctx context.Context, h *types.Header) error {
 	if !i.state.CompareAndSwap(stateIdling, stateProcessing) {
-		panic("Process called on non synced indexer")
+		panic("Process called before Sync or concurrently with another Process")
 	}
 	defer i.state.Store(stateIdling)
 
@@ -109,18 +111,18 @@ func (i *Indexer) sync(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	i.debug("fetched finalized header",
+	i.debug("Fetched finalized header",
 		"number", final.Number.Uint64(),
 		"duration", time.Since(start))
 
-	from := i.h.Filter().FromBlock
+	from := i.f.FromBlock
 	if i.head != (BlockRef{}) {
 		from = i.head.Number + 1
 	}
 	to := final.Number.Uint64()
 
 	if from > to {
-		i.info("no backfill required", "head", i.head.Number, "finalized", to)
+		i.info("No backfill required", "head", i.head.Number, "finalized", to)
 
 		return nil
 	}
@@ -144,7 +146,7 @@ func (i *Indexer) sync(ctx context.Context) error {
 	}
 	saveDur := time.Since(saveSt)
 
-	i.info("saved finalized checkpoint",
+	i.info("Saved finalized checkpoint",
 		"head", i.head.Number,
 		"snapshot", snapDur,
 		"save", saveDur)
@@ -158,7 +160,7 @@ func (i *Indexer) process(ctx context.Context, h *types.Header) error {
 	headNum := h.Number.Uint64()
 
 	if headNum <= idxNum {
-		i.l.Warn("ignoring old head",
+		i.warn("ignoring old head",
 			"current", idxNum,
 			"received", headNum)
 
@@ -262,7 +264,7 @@ func (i *Indexer) applyCheckpoint(ctx context.Context, cp *checkpoint) error {
 func (i *Indexer) processHead(ctx context.Context, h *types.Header) error {
 	start := time.Now()
 
-	logs, err := i.c.FilterLogs(ctx, i.h.Filter().blockQuery(h.Hash()))
+	logs, err := i.c.FilterLogs(ctx, i.f.blockQuery(h.Hash()))
 	if err != nil {
 		return fmt.Errorf("filter logs: %w", err)
 	}
@@ -384,7 +386,7 @@ func (idx *Indexer) headersRange(ctx context.Context, from, to uint64) ([]*types
 
 // logsRange returns logs for [from, to], caching fetched results.
 func (i *Indexer) logsRange(ctx context.Context, from, to uint64) ([]types.Log, error) {
-	q := i.h.Filter().rangeQuery(from, to)
+	q := i.f.rangeQuery(from, to)
 
 	cached, err := loadLogs(ctx, i.s, q)
 	if err != nil {

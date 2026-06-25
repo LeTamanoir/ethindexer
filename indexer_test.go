@@ -38,14 +38,8 @@ func TestIndexer_Backfill(t *testing.T) {
 	filter := Filter{FromBlock: 50}
 	handler := &mockHandler{}
 
-	indexer, err := NewIndexer(ctx, Config{
-		Client:  client,
-		Handler: handler,
-		Filter:  filter,
-		Store:   newMockStore(),
-		Logger:  testLogger(),
-	})
-	if err != nil {
+	indexer := NewIndexer(client, handler, filter, newMockStore(), testLogger(), Config{})
+	if err := indexer.Sync(ctx); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -81,14 +75,8 @@ func TestIndexer_Live(t *testing.T) {
 	filter := Filter{FromBlock: 10}
 	handler := &mockHandler{}
 
-	indexer, err := NewIndexer(ctx, Config{
-		Client:  client,
-		Handler: handler,
-		Filter:  filter,
-		Store:   newMockStore(),
-		Logger:  testLogger(),
-	})
-	if err != nil {
+	indexer := NewIndexer(client, handler, filter, newMockStore(), testLogger(), Config{})
+	if err := indexer.Sync(ctx); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -128,15 +116,8 @@ func TestIndexer_Promote(t *testing.T) {
 	handler := &mockHandler{}
 	store := newMockStore()
 
-	indexer, err := NewIndexer(ctx, Config{
-		Client:        client,
-		Handler:       handler,
-		Filter:        filter,
-		Store:         store,
-		Logger:        testLogger(),
-		FinalityDepth: 2,
-	})
-	if err != nil {
+	indexer := NewIndexer(client, handler, filter, store, testLogger(), Config{FinalityDepth: 2})
+	if err := indexer.Sync(ctx); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -198,15 +179,8 @@ func TestIndexer_PromoteGuardNoDangling(t *testing.T) {
 	handler := &mockHandler{}
 	store := newMockStore()
 
-	indexer, err := NewIndexer(ctx, Config{
-		Client:        client,
-		Handler:       handler,
-		Filter:        filter,
-		Store:         store,
-		Logger:        testLogger(),
-		FinalityDepth: 2,
-	})
-	if err != nil {
+	indexer := NewIndexer(client, handler, filter, store, testLogger(), Config{FinalityDepth: 2})
+	if err := indexer.Sync(ctx); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -278,14 +252,8 @@ func TestIndexer_Reorg(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	indexer, err := NewIndexer(ctx, Config{
-		Client:  client,
-		Handler: handler,
-		Filter:  filter,
-		Store:   store,
-		Logger:  testLogger(),
-	})
-	if err != nil {
+	indexer := NewIndexer(client, handler, filter, store, testLogger(), Config{})
+	if err := indexer.Sync(ctx); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -346,14 +314,8 @@ func TestIndexer_Restore(t *testing.T) {
 	filter := Filter{FromBlock: 10}
 	handler := &mockHandler{}
 
-	indexer, err := NewIndexer(ctx, Config{
-		Client:  client,
-		Handler: handler,
-		Filter:  filter,
-		Store:   store,
-		Logger:  testLogger(),
-	})
-	if err != nil {
+	indexer := NewIndexer(client, handler, filter, store, testLogger(), Config{})
+	if err := indexer.Sync(ctx); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 

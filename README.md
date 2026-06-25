@@ -31,17 +31,8 @@ if err != nil {
 	log.Fatal(err)
 }
 
-idx, err := ethindex.NewIndexer(ctx, ethindex.Config{
-	Client:  client,
-	Handler: myHandler,
-	Filter: ethindex.Filter{
-		FromBlock: 18_000_000,
-		Addresses: []common.Address{contractAddr},
-		Topics:    [][]common.Hash{{eventTopic}},
-	},
-	Store: store,
-})
-if err != nil {
+idx := ethindex.NewIndexer(client, myHandler, store, nil, ethindex.Config{})
+if err := idx.Sync(ctx); err != nil {
 	log.Fatal(err)
 }
 
@@ -64,13 +55,27 @@ for {
 }
 ```
 
-Implement `Handler` with your indexing logic:
+Implement `Handler` with your indexing logic. The handler owns its `Filter`,
+which tells the indexer which logs to fetch:
 
 ```go
 type Handler interface {
+	Filter() Filter
 	Snapshot(context.Context) ([]byte, error)
 	Restore(context.Context, []byte) error
 	Process(context.Context, []types.Log) error
+}
+```
+
+```go
+type myHandler struct{}
+
+func (h *myHandler) Filter() ethindex.Filter {
+	return ethindex.Filter{
+		FromBlock: 18_000_000,
+		Addresses: []common.Address{contractAddr},
+		Topics:    [][]common.Hash{{eventTopic}},
+	}
 }
 ```
 
@@ -78,19 +83,18 @@ See [`examples/weth`](examples/weth) for a full example.
 
 ## Config
 
-| Field             | Required | Default        | Description                                  |
-| ----------------- | -------- | -------------- | -------------------------------------------- |
-| `Client`          | yes      |                | Ethereum RPC client                          |
-| `Handler`         | yes      |                | Indexing logic                               |
-| `Filter`          | yes      |                | Logs to fetch                                |
-| `Store`           | yes      |                | Checkpoint/state persistence                 |
-| `Logger`          | no       | `slog.Default` | Operational logger                           |
-| `MaxBlockRange`   | no       | 10,000         | Max blocks per `eth_getLogs` request         |
-| `FinalityDepth`   | no       | 64             | Blocks before a dangling checkpoint is finalized |
-| `MaxConcurrency`  | no       | 16             | Max concurrent RPC calls when filling header gaps |
+`NewIndexer(client, handler, store, logger, cfg)` takes the dependencies as
+positional arguments and tunables via `Config`:
 
-`Filter.FromBlock` is the start block on a fresh run; ignored once a
-checkpoint exists.
+| Field             | Default | Description                                  |
+| ----------------- | ------- | -------------------------------------------- |
+| `MaxBlockRange`   | 10,000  | Max blocks per `eth_getLogs` request         |
+| `FinalityDepth`   | 64      | Blocks before a dangling checkpoint is finalized |
+| `MaxConcurrency`  | 16      | Max concurrent RPC calls when filling header gaps |
+
+`Logger` is required; pass `nil` to disable logging. `Filter.FromBlock` (set on
+the handler) is the start block on a fresh run; ignored once a checkpoint
+exists.
 
 ## How it works
 
@@ -105,29 +109,29 @@ S ------------------------ F --------- o --------- H
                             *
 ```
 
-`NewIndexer` restores the finalized checkpoint, backfills to the node's current
-finalized block (caching log batches on disk), then returns. `Process` checks
-each header's parent hash; on mismatch it rolls back to the last finalized
-checkpoint and re-indexes the divergent range, so reorgs are handled
-transparently.
+`NewIndexer` constructs the indexer. `Sync` restores the finalized checkpoint,
+backfills to the node's current finalized block (caching log batches on disk),
+then returns. `Process` checks each header's parent hash; on mismatch it rolls
+back to the last finalized checkpoint and re-indexes the divergent range, so
+reorgs are handled transparently.
 
 ## Logging
 
 The indexer logs lifecycle events (start, restore, backfill, reorgs, checkpoint
-promotions) and per-chunk/per-head diagnostics through the `slog.Logger` in
-`Config.Logger`. The default is `slog.Default`; pass a configured logger to
-route output elsewhere, or lower the level to `slog.LevelDebug` to see
-per-block and per-chunk detail:
+promotions) and per-chunk/per-head diagnostics through the `Logger` passed to
+`NewIndexer`. Pass `nil` to disable logging, or pass an `slog.Logger` to route
+output; lower the level to `slog.LevelDebug` to see per-block and per-chunk
+detail:
 
 ```go
 logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 	Level: slog.LevelDebug,
 }))
 
-idx, err := ethindex.NewIndexer(ctx, ethindex.Config{
-	// ...
-	Logger: logger,
-})
+idx := ethindex.NewIndexer(client, myHandler, store, logger, ethindex.Config{})
+if err := idx.Sync(ctx); err != nil {
+	log.Fatal(err)
+}
 ```
 
 ## Development

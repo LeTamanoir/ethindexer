@@ -53,6 +53,8 @@ func (e *WETH) Restore(_ context.Context, data []byte) error {
 	return gob.NewDecoder(bytes.NewReader(data)).Decode(e)
 }
 
+func (e *WETH) Filter() ethindex.Filter { return wethFilter }
+
 func (e *WETH) Snapshot(_ context.Context) ([]byte, error) {
 	var b bytes.Buffer
 	if err := gob.NewEncoder(&b).Encode(e); err != nil {
@@ -152,14 +154,9 @@ func run() error {
 
 	handler := NewWETH()
 
-	idx, err := ethindex.NewIndexer(ctx, ethindex.Config{
-		Client:  httpC,
-		Handler: handler,
-		Filter:  wethFilter,
-		Store:   store,
-	})
-	if err != nil {
-		return fmt.Errorf("new indexer: %w", err)
+	idx := ethindex.NewIndexer(httpC, handler, store, slog.Default(), ethindex.Config{})
+	if err := idx.Sync(ctx); err != nil {
+		return fmt.Errorf("sync indexer: %w", err)
 	}
 
 	heads := make(chan *types.Header, 128)
