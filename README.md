@@ -3,18 +3,15 @@
 [![CI](https://github.com/letamanoir/ethindex/actions/workflows/ci.yml/badge.svg)](https://github.com/letamanoir/ethindex/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/letamanoir/ethindex.svg)](https://pkg.go.dev/github.com/letamanoir/ethindex)
 
-A lightweight Ethereum log indexer library in Go. Handles backfilling, live
-following, checkpointing, reorg detection and resumable restarts so you can
-focus on your indexing logic.
+`ethindex` is a lightweight Go library for indexing Ethereum logs.
+
+It handles backfilling, live indexing, checkpointing, reorg recovery, and resumable restarts so handlers only need to implement application-specific indexing logic.
 
 ## Install
 
 ```bash
 go get github.com/letamanoir/ethindex
 ```
-
-Requires Go 1.26+ and an RPC node supporting `eth_getLogs` and the
-`finalized` block tag.
 
 ## Usage
 
@@ -32,11 +29,13 @@ if err != nil {
 }
 
 idx := ethindex.NewIndexer(client, myHandler, store, nil, ethindex.Config{})
+
 if err := idx.Sync(ctx); err != nil {
 	log.Fatal(err)
 }
 
 heads := make(chan *types.Header, 128)
+
 sub, err := client.SubscribeNewHead(ctx, heads)
 if err != nil {
 	log.Fatal(err)
@@ -47,10 +46,16 @@ for {
 	select {
 	case <-ctx.Done():
 		return
+
+	case err := <-sub.Err():
+		log.Fatal(err)
+
 	case h := <-heads:
 		if err := idx.Process(ctx, h); err != nil {
 			log.Fatal(err)
 		}
+
+		// Read handler state here.
 	}
 }
 ```
@@ -59,71 +64,54 @@ Implement `Handler` with your indexing logic:
 
 ```go
 type Handler interface {
+	Process(context.Context, []types.Log) error
 	Snapshot(context.Context) ([]byte, error)
 	Restore(context.Context, []byte) error
-	Process(context.Context, []types.Log) error
 }
 ```
 
-See [`examples/weth`](examples/weth) for a full example.
-
-## Config
-
-`NewIndexer(client, handler, store, logger, cfg)` takes the dependencies as
-positional arguments and tunables via `Config`:
-
-| Field             | Default | Description                                  |
-| ----------------- | ------- | -------------------------------------------- |
-| `MaxBlockRange`   | 10,000  | Max blocks per `eth_getLogs` request         |
-| `FinalityDepth`   | 64      | Blocks before a dangling checkpoint is finalized |
-| `MaxConcurrency`  | 16      | Max concurrent RPC calls when filling header gaps |
-
-`Logger` is required; pass `nil` to disable logging. `Filter.FromBlock` (set on
-the handler) is the start block on a fresh run; ignored once a checkpoint
-exists.
+See [`examples/weth`](examples/weth) for a complete example.
 
 ## How it works
 
-Two checkpoints are kept:
+`Sync` restores the latest finalized checkpoint, backfills to the node's current finalized block, and saves a new finalized checkpoint.
 
-- **Finalized (`*`)** — durable; restart always resumes here.
-- **Dangling (`o`)** — taken every `FinalityDepth` blocks, then promoted to
-  finalized once it ages past `FinalityDepth`.
+`Process` ingests new heads after `Sync` returns. Each header is checked against the current head. If a gap is detected, the indexer fills it. If a parent hash mismatch is detected, the indexer restores the finalized checkpoint and replays the canonical chain.
 
 ```text
-S ------------------------ F --------- o --------- H
-                            *
+Start block               Finalized block          Dangling     Latest
+     |                          |                     |           |
+     S --------[...]----------- F ------------------- D --------- L
+                                  <- FinalityDepth ->
 ```
 
-`NewIndexer` constructs the indexer. `Sync` restores the finalized checkpoint,
-backfills to the node's current finalized block (caching log batches on disk),
-then returns. `Process` checks each header's parent hash; on mismatch it rolls
-back to the last finalized checkpoint and re-indexes the divergent range, so
-reorgs are handled transparently.
+The indexer keeps two checkpoints:
 
-## Logging
+* **Finalized (`F`)**: durable restart point.
+* **Dangling (`D`)**: pending checkpoint promoted once it is old enough.
 
-The indexer logs lifecycle events (start, restore, backfill, reorgs, checkpoint
-promotions) and per-chunk/per-head diagnostics through the `Logger` passed to
-`NewIndexer`. Pass `nil` to disable logging, or pass an `slog.Logger` to route
-output; lower the level to `slog.LevelDebug` to see per-block and per-chunk
-detail:
+This lets the indexer resume quickly while avoiding committing state that may still be affected by reorgs.
+
+## Configuration
 
 ```go
-logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-	Level: slog.LevelDebug,
-}))
-
-idx := ethindex.NewIndexer(client, myHandler, store, logger, ethindex.Config{})
-if err := idx.Sync(ctx); err != nil {
-	log.Fatal(err)
+type Config struct {
+	MaxBlockRange  uint64
+	FinalityDepth uint64
+	MaxConcurrency int
 }
 ```
+
+| Field            |  Default | Description                                      |
+| ---------------- | -------: | ------------------------------------------------ |
+| `MaxBlockRange`  | `10,000` | Maximum block span per backfill request          |
+| `FinalityDepth`  |     `64` | Blocks before a dangling checkpoint is finalized |
+| `MaxConcurrency` |     `16` | Maximum concurrent header fetches                |
 
 ## Development
 
 ```bash
-just check   # fmt + vet + test
+just check
 go test ./...
 ```
 
