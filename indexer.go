@@ -228,16 +228,12 @@ func (i *Indexer) processHead(ctx context.Context, h *types.Header) error {
 
 	i.head = &blockRef{Number: h.Number.Uint64(), Hash: h.Hash()}
 
-	return i.checkpoint(ctx)
-}
-
-// checkpoint saves a checkpoint if none is staged, then promotes the
-// staged checkpoint to finalized once the head has aged past finalityDepth.
-func (i *Indexer) checkpoint(ctx context.Context) error {
+	// save a checkpoint if none is staged
 	if i.staged == nil {
 		return i.stageCheckpoint(ctx)
 	}
 
+	// promote staged to finalized once the head has aged past finalityDepth.
 	if i.head.Number >= i.staged.Number+i.cfg.FinalityDepth {
 		return i.promoteCheckpoint(ctx)
 	}
