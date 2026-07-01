@@ -48,3 +48,77 @@ type BlobStore interface {
 	// existing value under dstKey.
 	Move(ctx context.Context, srcKey, dstKey string) error
 }
+
+// Filter specifies which logs the indexer fetches.
+type Filter struct {
+	// FromBlock is the first block to index.
+	FromBlock uint64
+
+	// Addresses restrict logs to the given contract addresses.
+	// See [ethereum.FilterQuery.Addresses].
+	Addresses []common.Address
+
+	// Topics restrict logs by indexed event topics.
+	// See [ethereum.FilterQuery.Topics].
+	Topics [][]common.Hash
+}
+
+// rangeQuery builds a block-range FilterQuery over [from, to].
+func (f Filter) rangeQuery(from, to uint64) ethereum.FilterQuery {
+	return ethereum.FilterQuery{
+		FromBlock: new(big.Int).SetUint64(from),
+		ToBlock:   new(big.Int).SetUint64(to),
+		Addresses: f.Addresses,
+		Topics:    f.Topics,
+	}
+}
+
+// blockQuery builds a single-block FilterQuery anchored to hash.
+func (f Filter) blockQuery(hash common.Hash) ethereum.FilterQuery {
+	return ethereum.FilterQuery{
+		BlockHash: &hash,
+		Addresses: f.Addresses,
+		Topics:    f.Topics,
+	}
+}
+
+// Options configures an Indexer.
+type Options struct {
+	// Client provides access to Ethereum logs and block headers.
+	Client ChainReader
+
+	// Handler receives logs and owns the indexed state.
+	Handler Handler
+
+	// Store persists checkpoints and cached log batches.
+	Store BlobStore
+
+	// LogFunc receives indexer log events.
+	LogFunc func(msg string, args ...any)
+
+	Config Config
+}
+
+// Config holds the indexer's tunables.
+type Config struct {
+	// MaxBlockRange is the maximum block span per backfill request.
+	MaxBlockRange uint64
+
+	// FinalityDepth is the block depth considered finalized.
+	FinalityDepth uint64
+
+	// MaxConcurrency bounds concurrent header fetches.
+	MaxConcurrency int
+}
+
+func (c *Config) applyDefaults() {
+	if c.MaxBlockRange == 0 {
+		c.MaxBlockRange = 10_000
+	}
+	if c.FinalityDepth == 0 {
+		c.FinalityDepth = 64
+	}
+	if c.MaxConcurrency == 0 {
+		c.MaxConcurrency = 16
+	}
+}

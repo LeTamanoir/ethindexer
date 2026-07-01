@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"math/big"
 
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/rpc"
 	"golang.org/x/sync/errgroup"
 )
@@ -376,4 +378,39 @@ func (i *Indexer) backfillFinalized(ctx context.Context, from, to uint64) error 
 	i.log("Backfill complete", "from", from, "to", to)
 
 	return nil
+}
+
+type blockRange struct {
+	from uint64
+	to   uint64
+}
+
+func chunkBlockRange(from, to, size uint64) []blockRange {
+	if size == 0 {
+		panic("invalid block range size: 0")
+	}
+	var chunks []blockRange
+	for start := from; start <= to; start += size {
+		end := min(start+size-1, to)
+		chunks = append(chunks, blockRange{start, end})
+	}
+	return chunks
+}
+
+func logsKey(q ethereum.FilterQuery) string {
+	var b []byte
+
+	for _, a := range q.Addresses {
+		b = append(b, a[:]...)
+	}
+	for _, tt := range q.Topics {
+		b = append(b, '-')
+		for _, t := range tt {
+			b = append(b, t[:]...)
+		}
+	}
+
+	hash := crypto.Keccak256Hash(b)
+
+	return fmt.Sprintf("logs-%d-%d-%s", q.FromBlock, q.ToBlock, hash)
 }

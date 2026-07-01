@@ -4,21 +4,54 @@ import (
 	"encoding"
 	"encoding/binary"
 	"errors"
-	"fmt"
 
-	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/crypto"
 )
+
+// checkpoint stores handler state at a specific chain head.
+type checkpoint struct {
+	head  blockRef
+	state []byte
+}
 
 // logs is a slice of Ethereum logs that supports binary marshaling.
 type logs []types.Log
 
-var errInvalidLogs = errors.New("invalid logs")
+var (
+	errInvalidLogs       = errors.New("invalid logs")
+	errInvalidCheckpoint = errors.New("invalid checkpoint")
+)
 
-var _ encoding.BinaryMarshaler = (*logs)(nil)
-var _ encoding.BinaryUnmarshaler = (*logs)(nil)
+var (
+	_ encoding.BinaryMarshaler = (*logs)(nil)
+	_ encoding.BinaryMarshaler = (*checkpoint)(nil)
+
+	_ encoding.BinaryUnmarshaler = (*logs)(nil)
+	_ encoding.BinaryUnmarshaler = (*checkpoint)(nil)
+)
+
+func (c checkpoint) MarshalBinary() ([]byte, error) {
+	b := make([]byte, 0, 8+common.HashLength+len(c.state))
+
+	b = binary.LittleEndian.AppendUint64(b, c.head.Number)
+	b = append(b, c.head.Hash[:]...)
+	b = append(b, c.state...)
+
+	return b, nil
+}
+
+func (c *checkpoint) UnmarshalBinary(b []byte) error {
+	if len(b) < 8+common.HashLength {
+		return errInvalidCheckpoint
+	}
+
+	c.head.Number = binary.LittleEndian.Uint64(b)
+	c.head.Hash.SetBytes(b[8 : 8+common.HashLength])
+	c.state = append(c.state, b[8+common.HashLength:]...)
+
+	return nil
+}
 
 func (ls logs) MarshalBinary() ([]byte, error) {
 	size := 0
@@ -160,22 +193,4 @@ func unmarshalLog(b []byte, l *types.Log) ([]byte, error) {
 	b = b[8:]
 
 	return b, nil
-}
-
-func logsKey(q ethereum.FilterQuery) string {
-	var b []byte
-
-	for _, a := range q.Addresses {
-		b = append(b, a[:]...)
-	}
-	for _, tt := range q.Topics {
-		b = append(b, '-')
-		for _, t := range tt {
-			b = append(b, t[:]...)
-		}
-	}
-
-	hash := crypto.Keccak256Hash(b)
-
-	return fmt.Sprintf("logs-%d-%d-%s", q.FromBlock, q.ToBlock, hash)
 }
