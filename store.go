@@ -10,12 +10,12 @@ import (
 	"path/filepath"
 )
 
-// FileStore implements Store using files in a directory.
+// FileStore implements BlobStore using files in a directory.
 type FileStore struct {
 	dir string
 }
 
-var _ Store = (*FileStore)(nil)
+var _ BlobStore = (*FileStore)(nil)
 
 // NewFileStore creates a FileStore rooted at dir.
 func NewFileStore(dir string) (*FileStore, error) {
@@ -49,14 +49,27 @@ func (s *FileStore) Read(_ context.Context, key string) ([]byte, error) {
 }
 
 func (s *FileStore) Write(_ context.Context, key string, data []byte) error {
-	return atomicWrite(s.path(key), func(w io.Writer) error {
-		gw := gzip.NewWriter(w)
-		if _, err := gw.Write(data); err != nil {
-			_ = gw.Close()
-			return err
-		}
-		return gw.Close()
-	})
+	f, err := os.CreateTemp(s.dir, ".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := f.Name()
+	defer func() {
+		_ = f.Close()
+		_ = os.Remove(tmpName)
+	}()
+
+	gw := gzip.NewWriter(f)
+	if _, err := gw.Write(data); err != nil {
+		return err
+	}
+	if err := gw.Close(); err != nil {
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, s.path(key))
 }
 
 func (s *FileStore) Move(_ context.Context, srcKey, dstKey string) error {
@@ -67,28 +80,4 @@ func (s *FileStore) Move(_ context.Context, srcKey, dstKey string) error {
 		return fmt.Errorf("move %q to %q: %w", srcKey, dstKey, err)
 	}
 	return nil
-}
-
-// atomicWrite writes to a temp file, fsyncs it, then renames it over
-// filename so the destination never appears partially written.
-func atomicWrite(filename string, write func(io.Writer) error) error {
-	dir := filepath.Dir(filename)
-
-	f, err := os.CreateTemp(dir, ".tmp-*")
-	if err != nil {
-		return err
-	}
-	tmp := f.Name()
-	defer func() {
-		_ = f.Close()
-		_ = os.Remove(tmp)
-	}()
-
-	if err := write(f); err != nil {
-		return err
-	}
-	if err := f.Sync(); err != nil {
-		return err
-	}
-	return os.Rename(f.Name(), filename)
 }

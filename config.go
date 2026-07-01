@@ -4,15 +4,18 @@ package ethindex
 type Config struct {
 	// MaxBlockRange is the maximum block span per backfill request.
 	// Defaults to 10,000.
-	MaxBlockRange uint64 `json:"max_block_range"`
+	MaxBlockRange uint64
 
 	// FinalityDepth is the block depth considered finalized.
 	// Defaults to 64.
-	FinalityDepth uint64 `json:"finality_depth"`
+	FinalityDepth uint64
 
 	// MaxConcurrency bounds concurrent header fetches.
 	// Defaults to 16.
-	MaxConcurrency int `json:"max_concurrency"`
+	MaxConcurrency int
+
+	// LogFunc receives indexer log events.
+	LogFunc func(msg string, args ...any)
 }
 
 func (c *Config) applyDefaults() {

@@ -1,7 +1,6 @@
 package ethindex
 
 import (
-	"context"
 	"encoding"
 	"encoding/binary"
 	"errors"
@@ -164,45 +163,19 @@ func unmarshalLog(b []byte, l *types.Log) ([]byte, error) {
 }
 
 func logsKey(q ethereum.FilterQuery) string {
-	var parts [][]byte
+	var b []byte
 
 	for _, a := range q.Addresses {
-		parts = append(parts, a[:])
+		b = append(b, a[:]...)
 	}
 	for _, tt := range q.Topics {
+		b = append(b, '-')
 		for _, t := range tt {
-			parts = append(parts, t[:])
+			b = append(b, t[:]...)
 		}
 	}
 
-	hash := crypto.Keccak256Hash(parts...)
+	hash := crypto.Keccak256Hash(b)
 
 	return fmt.Sprintf("logs-%d-%d-%s", q.FromBlock, q.ToBlock, hash)
-}
-
-func loadLogs(ctx context.Context, s Store, q ethereum.FilterQuery) ([]types.Log, error) {
-	b, err := s.Read(ctx, logsKey(q))
-	if err != nil {
-		return nil, fmt.Errorf("store load: %w", err)
-	}
-	if len(b) == 0 {
-		return nil, nil
-	}
-
-	var logs Logs
-	if err := logs.UnmarshalBinary(b); err != nil {
-		return nil, fmt.Errorf("unmarshal: %w", err)
-	}
-	return logs, nil
-}
-
-func saveLogs(ctx context.Context, s Store, q ethereum.FilterQuery, logs []types.Log) error {
-	b, err := Logs(logs).MarshalBinary()
-	if err != nil {
-		return fmt.Errorf("marshal: %w", err)
-	}
-	if err := s.Write(ctx, logsKey(q), b); err != nil {
-		return fmt.Errorf("store save: %w", err)
-	}
-	return nil
 }
