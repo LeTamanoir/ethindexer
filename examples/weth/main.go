@@ -93,6 +93,7 @@ func (e *WETH) Process(_ context.Context, logs []types.Log) error {
 			al, ok := e.Allowances[owner]
 			if !ok {
 				al = make(map[common.Address]uint256.Int)
+				e.Allowances[owner] = al
 			}
 			al[spender] = *value
 		}

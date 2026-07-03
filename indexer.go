@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"time"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -67,6 +68,8 @@ func (i *Indexer) Sync(ctx context.Context) error {
 		return errors.New("indexer already synced")
 	}
 
+	start := time.Now()
+
 	i.log("Syncing indexer",
 		"finality_depth", i.cfg.FinalityDepth,
 		"max_block_range", i.cfg.MaxBlockRange,
@@ -80,7 +83,7 @@ func (i *Indexer) Sync(ctx context.Context) error {
 		return err
 	}
 
-	i.log("Indexer synced", "head", i.head.Number)
+	i.log("Indexer synced", "head", i.head.Number, "duration", time.Since(start))
 
 	return nil
 }
@@ -99,7 +102,7 @@ func (i *Indexer) Process(ctx context.Context, h *types.Header) error {
 		return nil
 	}
 
-	// Same-height heads are either duplicates or reorgs.
+	// same-height heads are either duplicates or reorgs.
 	if idxNum == headNum {
 		if h.Hash() == i.head.Hash {
 			i.log("Ignoring duplicate head", "head", idxNum)
@@ -109,12 +112,12 @@ func (i *Indexer) Process(ctx context.Context, h *types.Header) error {
 		return i.handleReorg(ctx, h)
 	}
 
-	// Ensure contiguous block processing.
+	// ensure contiguous block processing.
 	if headNum != idxNum+1 {
 		return i.backfillUnfinalized(ctx, idxNum+1, headNum)
 	}
 
-	// Ensure chain continuity.
+	// ensure chain continuity.
 	if i.head.Hash != h.ParentHash {
 		return i.handleReorg(ctx, h)
 	}
@@ -125,6 +128,8 @@ func (i *Indexer) Process(ctx context.Context, h *types.Header) error {
 // syncFinalized backfills from the restored head (or FromBlock on a fresh run)
 // up to the node's finalized block, then saves a finalized checkpoint.
 func (i *Indexer) syncFinalized(ctx context.Context) error {
+	start := time.Now()
+
 	final, err := i.c.HeaderByNumber(ctx, big.NewInt(int64(rpc.FinalizedBlockNumber)))
 	if err != nil {
 		return err
@@ -155,7 +160,7 @@ func (i *Indexer) syncFinalized(ctx context.Context) error {
 		return fmt.Errorf("promote checkpoint: %w", err)
 	}
 
-	i.log("Saved checkpoint", "head", i.head.Number)
+	i.log("Saved checkpoint", "head", i.head.Number, "duration", time.Since(start))
 
 	return nil
 }
@@ -165,16 +170,22 @@ func (i *Indexer) syncFinalized(ctx context.Context) error {
 // The range is assumed to be unfinalized, so each header is fetched
 // individually and logs are queried by block hash to preserve reorg safety.
 func (i *Indexer) backfillUnfinalized(ctx context.Context, from, to uint64) error {
+	start := time.Now()
+
 	heads, err := i.headersRange(ctx, from, to)
 	if err != nil {
 		return fmt.Errorf("headers range: %w", err)
 	}
+
+	i.log("Fetched headers", "from", from, "to", to, "count", len(heads), "duration", time.Since(start))
 
 	for _, h := range heads {
 		if err := i.Process(ctx, h); err != nil {
 			return err
 		}
 	}
+
+	i.log("Backfill unfinalized complete", "from", from, "to", to, "duration", time.Since(start))
 
 	return nil
 }
@@ -203,6 +214,8 @@ func (i *Indexer) handleReorg(ctx context.Context, h *types.Header) error {
 
 // restoreFinalized restores handler state from a checkpoint and records the head.
 func (i *Indexer) restoreFinalized(ctx context.Context) (bool, error) {
+	start := time.Now()
+
 	bin, err := i.s.Read(ctx, checkpointKey)
 	if err != nil {
 		return false, fmt.Errorf("store read: %w", err)
@@ -223,7 +236,7 @@ func (i *Indexer) restoreFinalized(ctx context.Context) (bool, error) {
 	h := cp.head // prevent escaping the whole checkpoint to the heap
 	i.head = &h
 
-	i.log("Restored checkpoint", "head", h.Number)
+	i.log("Restored checkpoint", "head", h.Number, "duration", time.Since(start))
 
 	return true, nil
 }
@@ -256,11 +269,13 @@ func (i *Indexer) processHead(ctx context.Context, h *types.Header) error {
 
 // promoteCheckpoint moves the staged checkpoint to finalized.
 func (i *Indexer) promoteCheckpoint(ctx context.Context) error {
+	start := time.Now()
+
 	if err := i.s.Move(ctx, checkpointStagedKey, checkpointKey); err != nil {
 		return fmt.Errorf("move: %w", err)
 	}
 
-	i.log("Promoted checkpoint", "head", i.staged.Number)
+	i.log("Promoted checkpoint", "head", i.staged.Number, "duration", time.Since(start))
 
 	i.staged = nil
 
@@ -269,6 +284,8 @@ func (i *Indexer) promoteCheckpoint(ctx context.Context) error {
 
 // stageCheckpoint saves a staged checkpoint.
 func (i *Indexer) stageCheckpoint(ctx context.Context) error {
+	start := time.Now()
+
 	state, err := i.h.Snapshot(ctx)
 	if err != nil {
 		return fmt.Errorf("snapshot: %w", err)
@@ -286,7 +303,7 @@ func (i *Indexer) stageCheckpoint(ctx context.Context) error {
 		return fmt.Errorf("store write: %w", err)
 	}
 
-	i.log("Staged checkpoint", "head", cp.head.Number)
+	i.log("Staged checkpoint", "head", cp.head.Number, "duration", time.Since(start))
 
 	i.staged = &h
 
@@ -365,9 +382,13 @@ func (i *Indexer) logsRange(ctx context.Context, from, to uint64) ([]types.Log, 
 func (i *Indexer) backfillFinalized(ctx context.Context, from, to uint64) error {
 	chunks := chunkBlockRange(from, to, i.cfg.MaxBlockRange)
 
+	start := time.Now()
+
 	i.log("Starting backfill", "from", from, "to", to, "chunks", len(chunks))
 
 	for _, ch := range chunks {
+		chunkStart := time.Now()
+
 		logs, err := i.logsRange(ctx, ch.from, ch.to)
 		if err != nil {
 			return fmt.Errorf("get logs: %w", err)
@@ -381,10 +402,10 @@ func (i *Indexer) backfillFinalized(ctx context.Context, from, to uint64) error 
 			return fmt.Errorf("process logs: %w", err)
 		}
 
-		i.log("Backfill chunk processed", "from", ch.from, "to", ch.to, "logs", len(logs))
+		i.log("Backfill chunk processed", "from", ch.from, "to", ch.to, "logs", len(logs), "duration", time.Since(chunkStart))
 	}
 
-	i.log("Backfill complete", "from", from, "to", to)
+	i.log("Backfill complete", "from", from, "to", to, "duration", time.Since(start))
 
 	return nil
 }
