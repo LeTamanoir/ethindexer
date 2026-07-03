@@ -30,6 +30,8 @@ type Indexer struct {
 
 	head   *blockRef // head of the last indexed block
 	staged *blockRef // head of the staged checkpoint
+
+	lastStagedNum uint64 // block number of the most recent staged checkpoint
 }
 
 // NewIndexer returns an unsynced Indexer.
@@ -72,6 +74,7 @@ func (i *Indexer) Sync(ctx context.Context) error {
 
 	i.log("Syncing indexer",
 		"finality_depth", i.cfg.FinalityDepth,
+		"checkpoint_interval", i.cfg.CheckpointInterval,
 		"max_block_range", i.cfg.MaxBlockRange,
 		"max_concurrent", i.cfg.MaxConcurrency)
 
@@ -200,6 +203,7 @@ func (i *Indexer) handleReorg(ctx context.Context, h *types.Header) error {
 
 	i.head = nil
 	i.staged = nil
+	i.lastStagedNum = 0
 
 	ok, err := i.restoreFinalized(ctx)
 	if err != nil {
@@ -235,6 +239,7 @@ func (i *Indexer) restoreFinalized(ctx context.Context) (bool, error) {
 
 	h := cp.head // prevent escaping the whole checkpoint to the heap
 	i.head = &h
+	i.lastStagedNum = h.Number
 
 	i.log("Restored checkpoint", "head", h.Number, "duration", time.Since(start))
 
@@ -254,9 +259,12 @@ func (i *Indexer) processHead(ctx context.Context, h *types.Header) error {
 
 	i.head = &blockRef{Number: h.Number.Uint64(), Hash: h.Hash()}
 
-	// save a checkpoint if none is staged
+	// save a checkpoint if none is staged and enough blocks have passed
 	if i.staged == nil {
-		return i.stageCheckpoint(ctx)
+		if i.head.Number >= i.lastStagedNum+i.cfg.CheckpointInterval {
+			return i.stageCheckpoint(ctx)
+		}
+		return nil
 	}
 
 	// promote staged to finalized once the head has aged past finalityDepth.
@@ -306,6 +314,7 @@ func (i *Indexer) stageCheckpoint(ctx context.Context) error {
 	i.log("Staged checkpoint", "head", cp.head.Number, "duration", time.Since(start))
 
 	i.staged = &h
+	i.lastStagedNum = h.Number
 
 	return nil
 }

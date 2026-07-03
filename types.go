@@ -113,6 +113,9 @@ type Config struct {
 	// FinalityDepth is the block depth considered finalized.
 	FinalityDepth uint64
 
+	// CheckpointInterval is the minimum number of blocks between staged checkpoints.
+	CheckpointInterval uint64
+
 	// MaxConcurrency bounds concurrent header fetches.
 	MaxConcurrency int
 }
