@@ -94,10 +94,19 @@ func (i *Indexer) Process(ctx context.Context, h *types.Header) error {
 	idxNum := i.head.Number
 	headNum := h.Number.Uint64()
 
-	if headNum <= idxNum {
+	if headNum < idxNum {
 		i.log("Ignoring older head", "current", idxNum, "received", headNum)
-
 		return nil
+	}
+
+	// Same-height heads are either duplicates or reorgs.
+	if idxNum == headNum {
+		if h.Hash() == i.head.Hash {
+			i.log("Ignoring duplicate head", "number", idxNum)
+			return nil
+		}
+
+		return i.handleReorg(ctx, h)
 	}
 
 	// Ensure contiguous block processing.
