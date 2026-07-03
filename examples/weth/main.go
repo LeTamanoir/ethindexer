@@ -158,7 +158,7 @@ func run() error {
 		Client:  httpC,
 		Handler: handler,
 		Store:   store,
-		LogFunc: slog.Default().Info,
+		LogFunc: slog.Info,
 	})
 	if err != nil {
 		return fmt.Errorf("open indexer: %w", err)
@@ -178,6 +178,8 @@ func run() error {
 			if err := idx.Process(ctx, h); err != nil {
 				return fmt.Errorf("process head %d: %w", h.Number, err)
 			}
+
+			slog.Info("Processed new head", "number", h.Number.Uint64(), "hash", h.Hash())
 
 			// Do whatever you want with handler state
 		}
