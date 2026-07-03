@@ -70,7 +70,7 @@ func (i *Indexer) Sync(ctx context.Context) error {
 	i.log("Syncing indexer",
 		"finality_depth", i.cfg.FinalityDepth,
 		"max_block_range", i.cfg.MaxBlockRange,
-		"max_concurent", i.cfg.MaxConcurrency)
+		"max_concurrent", i.cfg.MaxConcurrency)
 
 	if _, err := i.restoreFinalized(ctx); err != nil {
 		return err
