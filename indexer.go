@@ -102,7 +102,7 @@ func (i *Indexer) Process(ctx context.Context, h *types.Header) error {
 	// Same-height heads are either duplicates or reorgs.
 	if idxNum == headNum {
 		if h.Hash() == i.head.Hash {
-			i.log("Ignoring duplicate head", "number", idxNum)
+			i.log("Ignoring duplicate head", "head", idxNum)
 			return nil
 		}
 
@@ -181,7 +181,11 @@ func (i *Indexer) backfillUnfinalized(ctx context.Context, from, to uint64) erro
 
 // handleReorg restores the finalized checkpoint and reprocesses the divergent head.
 func (i *Indexer) handleReorg(ctx context.Context, h *types.Header) error {
-	i.log("Reorg detected", "head", i.head.Number, "expected_parent", i.head.Hash, "got_parent", h.ParentHash)
+	if i.head.Number == h.Number.Uint64() {
+		i.log("Reorg detected at current head", "head", i.head.Number, "current_hash", i.head.Hash, "received_hash", h.Hash())
+	} else {
+		i.log("Reorg detected", "head", i.head.Number, "expected_parent", i.head.Hash, "got_parent", h.ParentHash)
+	}
 
 	i.head = nil
 	i.staged = nil

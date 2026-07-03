@@ -179,7 +179,7 @@ func run() error {
 				return fmt.Errorf("process head %d: %w", h.Number, err)
 			}
 
-			slog.Info("Processed new head", "number", h.Number.Uint64(), "hash", h.Hash())
+			slog.Info("Processed new head", "head", h.Number.Uint64(), "hash", h.Hash())
 
 			// Do whatever you want with handler state
 		}
