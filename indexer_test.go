@@ -116,7 +116,7 @@ func TestIndexer_Promote(t *testing.T) {
 	handler := &mockHandler{filter: filter}
 	store := newMockStore()
 
-	indexer := NewIndexer(Options{client, handler, store, nil, Config{FinalityDepth: 2}})
+	indexer := NewIndexer(Options{client, handler, store, nil, Config{FinalityDepth: 2, CheckpointInterval: 1}})
 	if err := indexer.Sync(ctx); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -183,7 +183,7 @@ func TestIndexer_PromoteGuardNoStaged(t *testing.T) {
 	handler := &mockHandler{filter: filter}
 	store := newMockStore()
 
-	indexer := NewIndexer(Options{client, handler, store, nil, Config{FinalityDepth: 2}})
+	indexer := NewIndexer(Options{client, handler, store, nil, Config{FinalityDepth: 2, CheckpointInterval: 1}})
 	if err := indexer.Sync(ctx); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
