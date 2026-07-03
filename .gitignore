@@ -2,6 +2,7 @@
 .DS_Store
 .cache/
 *.out
+*.log
 *.txt
 *.test
 *.pprof
