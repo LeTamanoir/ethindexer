@@ -10,7 +10,7 @@ It handles backfilling, live indexing, checkpointing, reorg recovery, and resuma
 ## Install
 
 ```bash
-go get github.com/letamanoir/ethindexer
+go get github.com/LeTamanoir/ethindexer
 ```
 
 ## Usage
