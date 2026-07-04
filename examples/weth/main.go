@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/LeTamanoir/ethindexer"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
@@ -20,7 +21,6 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/holiman/uint256"
 	"github.com/joho/godotenv"
-	"github.com/LeTamanoir/ethindexer"
 )
 
 var (
