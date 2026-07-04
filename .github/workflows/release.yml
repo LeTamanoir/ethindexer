@@ -43,6 +43,26 @@ jobs:
       - name: Test
         run: go test ./...
 
+      - name: Get previous tag
+        id: prev_tag
+        run: |
+          current_tag="${GITHUB_REF#refs/tags/}"
+          prev_tag=$(git tag --sort=-creatordate | grep -v "^${current_tag}$" | head -n 1)
+          echo "tag=$prev_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Build changelog
+        id: changelog
+        run: |
+          prev="${{ steps.prev_tag.outputs.tag }}"
+          current="${GITHUB_REF#refs/tags/}"
+          {
+            echo "changelog<<EOF"
+            echo "## Commits"
+            git log "${prev}..${current}" --pretty=format:"- %s (%h)"
+            echo ""
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -50,4 +70,4 @@ jobs:
           gh release create "${GITHUB_REF_NAME}" \
             --verify-tag \
             --title "${GITHUB_REF_NAME}" \
-            --generate-notes
+            --notes "${{ steps.changelog.outputs.changelog }}"
