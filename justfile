@@ -36,5 +36,5 @@ release version:
     @echo "{{version}}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$$' || (echo "invalid semver tag: {{version}}" && exit 1)
     go test ./...
     git diff --quiet || (echo "working tree is dirty" && exit 1)
-    git tag -a "{{version}}" -m "{{version}}"
+    git tag -a "{{version}}" -s -m "{{version}}"
     git push origin "{{version}}"
