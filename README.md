@@ -1,7 +1,7 @@
 # ethindexer
 
-[![CI](https://github.com/letamanoir/ethindexer/actions/workflows/ci.yml/badge.svg)](https://github.com/letamanoir/ethindexer/actions/workflows/ci.yml)
-[![Go Reference](https://pkg.go.dev/badge/github.com/letamanoir/ethindexer.svg)](https://pkg.go.dev/github.com/letamanoir/ethindexer)
+[![CI](https://github.com/LeTamanoir/ethindexer/actions/workflows/ci.yml/badge.svg)](https://github.com/LeTamanoir/ethindexer/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/LeTamanoir/ethindexer.svg)](https://pkg.go.dev/github.com/LeTamanoir/ethindexer)
 
 `ethindexer` is a lightweight Go library for indexing Ethereum logs.
 

@@ -1,4 +1,4 @@
-module github.com/letamanoir/ethindex/examples
+module github.com/LeTamanoir/ethindex/examples
 
 go 1.26.3
 
@@ -6,10 +6,10 @@ require (
 	github.com/ethereum/go-ethereum v1.17.3
 	github.com/holiman/uint256 v1.3.2
 	github.com/joho/godotenv v1.5.1
-	github.com/letamanoir/ethindexer v0.0.0-20260615194915-a54c79b73f8d
+	github.com/LeTamanoir/ethindexer v0.0.0-20260615194915-a54c79b73f8d
 )
 
-replace github.com/letamanoir/ethindexer => ../
+replace github.com/LeTamanoir/ethindexer => ../
 
 require (
 	github.com/DataDog/zstd v1.4.5 // indirect
