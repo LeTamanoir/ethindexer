@@ -43,8 +43,8 @@ func TestIndexer_Backfill(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if indexer.head.Number != finalizedBlockNum {
-		t.Errorf("expected head number %d, got %d", finalizedBlockNum, indexer.head.Number)
+	if indexer.head.number != finalizedBlockNum {
+		t.Errorf("expected head number %d, got %d", finalizedBlockNum, indexer.head.number)
 	}
 
 	if len(handler.processed) != int(finalizedBlockNum-50+1) {
@@ -81,7 +81,7 @@ func TestIndexer_Live(t *testing.T) {
 	}
 
 	// Simulate the user feeding live new heads to the indexer.
-	h11 := &types.Header{Number: big.NewInt(11), ParentHash: indexer.head.Hash}
+	h11 := &types.Header{Number: big.NewInt(11), ParentHash: indexer.head.hash}
 	h12 := &types.Header{Number: big.NewInt(12), ParentHash: h11.Hash()}
 	h13 := &types.Header{Number: big.NewInt(13), ParentHash: h12.Hash()}
 
@@ -91,8 +91,8 @@ func TestIndexer_Live(t *testing.T) {
 		}
 	}
 
-	if indexer.head.Number != 13 {
-		t.Errorf("expected head number 13, got %d", indexer.head.Number)
+	if indexer.head.number != 13 {
+		t.Errorf("expected head number 13, got %d", indexer.head.number)
 	}
 }
 
@@ -122,7 +122,7 @@ func TestIndexer_Promote(t *testing.T) {
 	}
 
 	// Build a consecutive chain so no reorg is triggered.
-	h11 := &types.Header{Number: big.NewInt(11), ParentHash: indexer.head.Hash}
+	h11 := &types.Header{Number: big.NewInt(11), ParentHash: indexer.head.hash}
 	h12 := &types.Header{Number: big.NewInt(12), ParentHash: h11.Hash()}
 	h13 := &types.Header{Number: big.NewInt(13), ParentHash: h12.Hash()}
 
@@ -145,8 +145,8 @@ func TestIndexer_Promote(t *testing.T) {
 	if err != nil {
 		t.Fatal("expected valid checkpoint")
 	}
-	if cp.head.Number != 11 {
-		t.Errorf("expected finalized head 11 after promote, got %d", cp.head.Number)
+	if cp.head.number != 11 {
+		t.Errorf("expected finalized head 11 after promote, got %d", cp.head.number)
 	}
 
 	// The staged key should be gone after the move.
@@ -157,7 +157,7 @@ func TestIndexer_Promote(t *testing.T) {
 	}
 
 	if indexer.staged != nil {
-		t.Errorf("expected staged to be reset after promote, got %d", indexer.staged.Number)
+		t.Errorf("expected staged to be reset after promote, got %d", indexer.staged.number)
 	}
 }
 
@@ -192,9 +192,9 @@ func TestIndexer_PromoteGuardNoStaged(t *testing.T) {
 	// restore it) while head is well past finalityDepth. The promote check
 	// must be a no-op, not a crash.
 	indexer.staged = nil
-	indexer.head = &blockRef{Number: 200, Hash: common.HexToHash("0xabc")}
+	indexer.head = &blockRef{number: 200, hash: common.HexToHash("0xabc")}
 
-	h201 := &types.Header{Number: big.NewInt(201), ParentHash: indexer.head.Hash}
+	h201 := &types.Header{Number: big.NewInt(201), ParentHash: indexer.head.hash}
 
 	// This should NOT crash with "staged checkpoint missing from store".
 	if err := indexer.Process(ctx, h201); err != nil {
@@ -245,7 +245,7 @@ func TestIndexer_Reorg(t *testing.T) {
 
 	// Save a finalized checkpoint so Process can recover from a reorg.
 	cp := checkpoint{
-		head:  blockRef{Number: finalizedBlockNum, Hash: h10.Hash()},
+		head:  blockRef{number: finalizedBlockNum, hash: h10.Hash()},
 		state: []byte("restored_state"),
 	}
 	cpb, err := marshalCheckpoint(cp)
@@ -282,8 +282,8 @@ func TestIndexer_Reorg(t *testing.T) {
 		t.Errorf("expected handler state to be restored after reorg, got %q", handler.state)
 	}
 
-	if indexer.head.Number != 12 {
-		t.Errorf("expected head to be 12 after reorg recovery, got %d", indexer.head.Number)
+	if indexer.head.number != 12 {
+		t.Errorf("expected head to be 12 after reorg recovery, got %d", indexer.head.number)
 	}
 }
 
@@ -293,7 +293,7 @@ func TestIndexer_Restore(t *testing.T) {
 	finalizedBlockNum := uint64(50)
 
 	cp := checkpoint{
-		head:  blockRef{Number: 50, Hash: common.HexToHash("0x123")},
+		head:  blockRef{number: 50, hash: common.HexToHash("0x123")},
 		state: []byte("restored_state"),
 	}
 	cpb, err := marshalCheckpoint(cp)
@@ -327,7 +327,7 @@ func TestIndexer_Restore(t *testing.T) {
 		t.Errorf("expected handler state to be restored, got %s", handler.state)
 	}
 
-	if indexer.head.Number != 50 {
-		t.Errorf("expected head to be 50, got %d", indexer.head.Number)
+	if indexer.head.number != 50 {
+		t.Errorf("expected head to be 50, got %d", indexer.head.number)
 	}
 }

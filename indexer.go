@@ -86,7 +86,7 @@ func (i *Indexer) Sync(ctx context.Context) error {
 		return err
 	}
 
-	i.log("Indexer synced", "head", i.head.Number, "duration", time.Since(start))
+	i.log("Indexer synced", "head", i.head.number, "duration", time.Since(start))
 
 	return nil
 }
@@ -97,7 +97,7 @@ func (i *Indexer) Process(ctx context.Context, h *types.Header) error {
 		return errors.New("indexer not synced")
 	}
 
-	idxNum := i.head.Number
+	idxNum := i.head.number
 	headNum := h.Number.Uint64()
 
 	if headNum < idxNum {
@@ -107,7 +107,7 @@ func (i *Indexer) Process(ctx context.Context, h *types.Header) error {
 
 	// same-height heads are either duplicates or reorgs.
 	if idxNum == headNum {
-		if h.Hash() == i.head.Hash {
+		if h.Hash() == i.head.hash {
 			i.log("Ignoring duplicate head", "head", idxNum)
 			return nil
 		}
@@ -121,7 +121,7 @@ func (i *Indexer) Process(ctx context.Context, h *types.Header) error {
 	}
 
 	// ensure chain continuity.
-	if i.head.Hash != h.ParentHash {
+	if i.head.hash != h.ParentHash {
 		return i.handleReorg(ctx, h)
 	}
 
@@ -140,12 +140,12 @@ func (i *Indexer) syncFinalized(ctx context.Context) error {
 
 	from := i.h.Filter().FromBlock
 	if i.head != nil {
-		from = i.head.Number + 1
+		from = i.head.number + 1
 	}
 	to := final.Number.Uint64()
 
 	if from > to {
-		i.log("No backfill required", "head", i.head.Number, "finalized", to)
+		i.log("No backfill required", "head", i.head.number, "finalized", to)
 
 		return nil
 	}
@@ -154,7 +154,7 @@ func (i *Indexer) syncFinalized(ctx context.Context) error {
 		return fmt.Errorf("backfill: %w", err)
 	}
 
-	i.head = &blockRef{Number: to, Hash: final.Hash()}
+	i.head = &blockRef{number: to, hash: final.Hash()}
 
 	if err := i.stageCheckpoint(ctx); err != nil {
 		return fmt.Errorf("stage checkpoint: %w", err)
@@ -163,7 +163,7 @@ func (i *Indexer) syncFinalized(ctx context.Context) error {
 		return fmt.Errorf("promote checkpoint: %w", err)
 	}
 
-	i.log("Saved checkpoint", "head", i.head.Number, "duration", time.Since(start))
+	i.log("Saved checkpoint", "head", i.head.number, "duration", time.Since(start))
 
 	return nil
 }
@@ -195,10 +195,10 @@ func (i *Indexer) backfillUnfinalized(ctx context.Context, from, to uint64) erro
 
 // handleReorg restores the finalized checkpoint and reprocesses the divergent head.
 func (i *Indexer) handleReorg(ctx context.Context, h *types.Header) error {
-	if i.head.Number == h.Number.Uint64() {
-		i.log("Reorg detected at current head", "head", i.head.Number, "current_hash", i.head.Hash, "received_hash", h.Hash())
+	if i.head.number == h.Number.Uint64() {
+		i.log("Reorg detected at current head", "head", i.head.number, "current_hash", i.head.hash, "received_hash", h.Hash())
 	} else {
-		i.log("Reorg detected", "head", i.head.Number, "expected_parent", i.head.Hash, "got_parent", h.ParentHash)
+		i.log("Reorg detected", "head", i.head.number, "expected_parent", i.head.hash, "got_parent", h.ParentHash)
 	}
 
 	i.head = nil
@@ -239,9 +239,9 @@ func (i *Indexer) restoreFinalized(ctx context.Context) (bool, error) {
 
 	h := cp.head // prevent escaping the whole checkpoint to the heap
 	i.head = &h
-	i.lastStagedNum = h.Number
+	i.lastStagedNum = h.number
 
-	i.log("Restored checkpoint", "head", h.Number, "duration", time.Since(start))
+	i.log("Restored checkpoint", "head", h.number, "duration", time.Since(start))
 
 	return true, nil
 }
@@ -257,18 +257,18 @@ func (i *Indexer) processHead(ctx context.Context, h *types.Header) error {
 		return fmt.Errorf("process logs: %w", err)
 	}
 
-	i.head = &blockRef{Number: h.Number.Uint64(), Hash: h.Hash()}
+	i.head = &blockRef{number: h.Number.Uint64(), hash: h.Hash()}
 
 	// save a checkpoint if none is staged and enough blocks have passed
 	if i.staged == nil {
-		if i.head.Number >= i.lastStagedNum+i.cfg.CheckpointInterval {
+		if i.head.number >= i.lastStagedNum+i.cfg.CheckpointInterval {
 			return i.stageCheckpoint(ctx)
 		}
 		return nil
 	}
 
 	// promote staged to finalized once the head has aged past finalityDepth.
-	if i.head.Number >= i.staged.Number+i.cfg.FinalityDepth {
+	if i.head.number >= i.staged.number+i.cfg.FinalityDepth {
 		return i.promoteCheckpoint(ctx)
 	}
 
@@ -283,7 +283,7 @@ func (i *Indexer) promoteCheckpoint(ctx context.Context) error {
 		return fmt.Errorf("move: %w", err)
 	}
 
-	i.log("Promoted checkpoint", "head", i.staged.Number, "duration", time.Since(start))
+	i.log("Promoted checkpoint", "head", i.staged.number, "duration", time.Since(start))
 
 	i.staged = nil
 
@@ -311,10 +311,10 @@ func (i *Indexer) stageCheckpoint(ctx context.Context) error {
 		return fmt.Errorf("store write: %w", err)
 	}
 
-	i.log("Staged checkpoint", "head", cp.head.Number, "duration", time.Since(start))
+	i.log("Staged checkpoint", "head", cp.head.number, "duration", time.Since(start))
 
 	i.staged = &h
-	i.lastStagedNum = h.Number
+	i.lastStagedNum = h.number
 
 	return nil
 }
