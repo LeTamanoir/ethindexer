@@ -17,8 +17,8 @@ type checkpoint struct {
 
 // blockRef is a (number, hash) pair identifying a block.
 type blockRef struct {
-	Number uint64
-	Hash   common.Hash
+	number uint64
+	hash   common.Hash
 }
 
 // Handler defines the application-specific indexing logic.

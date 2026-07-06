@@ -16,8 +16,8 @@ var (
 func marshalCheckpoint(c checkpoint) ([]byte, error) {
 	b := make([]byte, 0, 8+common.HashLength+len(c.state))
 
-	b = binary.LittleEndian.AppendUint64(b, c.head.Number)
-	b = append(b, c.head.Hash[:]...)
+	b = binary.LittleEndian.AppendUint64(b, c.head.number)
+	b = append(b, c.head.hash[:]...)
 	b = append(b, c.state...)
 
 	return b, nil
@@ -30,8 +30,8 @@ func unmarshalCheckpoint(b []byte) (checkpoint, error) {
 
 	return checkpoint{
 		head: blockRef{
-			Number: binary.LittleEndian.Uint64(b),
-			Hash:   common.Hash(b[8 : 8+common.HashLength]),
+			number: binary.LittleEndian.Uint64(b),
+			hash:   common.Hash(b[8 : 8+common.HashLength]),
 		},
 		state: append([]byte(nil), b[8+common.HashLength:]...),
 	}, nil
