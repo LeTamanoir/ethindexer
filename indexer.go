@@ -2,6 +2,9 @@ package ethindexer
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/big"
@@ -9,7 +12,6 @@ import (
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/rpc"
 	"golang.org/x/sync/errgroup"
 )
@@ -352,7 +354,7 @@ func (i *Indexer) logsRange(ctx context.Context, from, to uint64) ([]types.Log, 
 	q := i.h.Filter().rangeQuery(from, to)
 
 	{
-		bin, err := i.s.Read(ctx, logsKey(q))
+		bin, err := i.s.Read(ctx, logsCacheKey(q))
 		if err != nil {
 			return nil, fmt.Errorf("store read: %w", err)
 		}
@@ -375,7 +377,7 @@ func (i *Indexer) logsRange(ctx context.Context, from, to uint64) ([]types.Log, 
 		if err != nil {
 			return nil, fmt.Errorf("marshal: %w", err)
 		}
-		if err := i.s.Write(ctx, logsKey(q), bin); err != nil {
+		if err := i.s.Write(ctx, logsCacheKey(q), bin); err != nil {
 			return nil, fmt.Errorf("store write: %w", err)
 		}
 	}
@@ -436,20 +438,26 @@ func chunkBlockRange(from, to, size uint64) []blockRange {
 	return chunks
 }
 
-func logsKey(q ethereum.FilterQuery) string {
+func logsCacheKey(q ethereum.FilterQuery) string {
+	if q.BlockHash != nil || q.ToBlock == nil || q.FromBlock == nil {
+		panic("logs cache key requires a range query")
+	}
+
 	var b []byte
 
+	b = binary.LittleEndian.AppendUint64(b, uint64(len(q.Addresses)))
 	for _, a := range q.Addresses {
 		b = append(b, a[:]...)
 	}
+	b = binary.LittleEndian.AppendUint64(b, uint64(len(q.Topics)))
 	for _, tt := range q.Topics {
-		b = append(b, '-')
+		b = binary.LittleEndian.AppendUint64(b, uint64(len(tt)))
 		for _, t := range tt {
 			b = append(b, t[:]...)
 		}
 	}
 
-	hash := crypto.Keccak256Hash(b)
+	hash := sha256.Sum256(b)
 
-	return fmt.Sprintf("logs-%d-%d-%s", q.FromBlock, q.ToBlock, hash)
+	return fmt.Sprintf("logs-%d-%d-%s", q.FromBlock, q.ToBlock, hex.EncodeToString(hash[:]))
 }
