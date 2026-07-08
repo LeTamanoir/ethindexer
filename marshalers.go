@@ -38,9 +38,8 @@ func unmarshalCheckpoint(b []byte) (checkpoint, error) {
 	}, nil
 }
 
-// readUvarint reads a uvarint from b, returning the value, the remaining
-// slice, and true on success. If b is too short or the value overflows,
-// it returns (_, nil, false).
+// readUvarint reads a uvarint from b, returning the value, remaining bytes,
+// and true on success.
 func readUvarint(b []byte) (uint64, []byte, bool) {
 	v, n := binary.Uvarint(b)
 	if n <= 0 {
