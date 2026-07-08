@@ -7,5 +7,6 @@
 *.test
 *.pprof
 *.gz
+*.zst
 .env
 */bin/*

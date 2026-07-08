@@ -11,19 +11,32 @@ import (
 var (
 	errInvalidLogs       = errors.New("invalid logs")
 	errInvalidCheckpoint = errors.New("invalid checkpoint")
+	errInvalidVersion    = errors.New("invalid format version")
+)
+
+const (
+	logsVersion       = 1
+	checkpointVersion = 1
 )
 
 func marshalCheckpoint(c checkpoint) ([]byte, error) {
-	b := make([]byte, 0, 8+common.HashLength+len(c.state))
-
+	b := make([]byte, 0, 1+8+common.HashLength+len(c.state))
+	b = append(b, checkpointVersion)
 	b = binary.LittleEndian.AppendUint64(b, c.head.number)
 	b = append(b, c.head.hash[:]...)
 	b = append(b, c.state...)
-
 	return b, nil
 }
 
 func unmarshalCheckpoint(b []byte) (checkpoint, error) {
+	if len(b) == 0 {
+		return checkpoint{}, errInvalidCheckpoint
+	}
+	if b[0] != checkpointVersion {
+		return checkpoint{}, errInvalidVersion
+	}
+	b = b[1:]
+
 	if len(b) < 8+common.HashLength {
 		return checkpoint{}, errInvalidCheckpoint
 	}
@@ -43,8 +56,8 @@ func marshalLogs(logs []types.Log) ([]byte, error) {
 		size += logSize(l)
 	}
 
-	b := make([]byte, 0, 8+size)
-
+	b := make([]byte, 0, 1+8+size)
+	b = append(b, logsVersion)
 	b = binary.LittleEndian.AppendUint64(b, uint64(len(logs)))
 	for _, l := range logs {
 		b = appendLog(b, l)
@@ -54,6 +67,14 @@ func marshalLogs(logs []types.Log) ([]byte, error) {
 }
 
 func unmarshalLogs(b []byte) ([]types.Log, error) {
+	if len(b) == 0 {
+		return nil, errInvalidLogs
+	}
+	if b[0] != logsVersion {
+		return nil, errInvalidVersion
+	}
+	b = b[1:]
+
 	if len(b) < 8 {
 		return nil, errInvalidLogs
 	}
@@ -138,7 +159,8 @@ func unmarshalLog(b []byte) (l types.Log, out []byte) {
 	if len(b) < dataLen {
 		return
 	}
-	l.Data = append(l.Data[:0], b[:dataLen]...)
+	l.Data = make([]byte, dataLen)
+	copy(l.Data, b[:dataLen])
 	b = b[dataLen:]
 
 	if len(b) < 8 {

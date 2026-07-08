@@ -4,6 +4,7 @@ go 1.26.0
 
 require (
 	github.com/ethereum/go-ethereum v1.17.3
+	github.com/klauspost/compress v1.19.0
 	golang.org/x/sync v0.19.0
 )
 
