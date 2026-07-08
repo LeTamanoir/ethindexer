@@ -133,8 +133,6 @@ func (i *Indexer) Process(ctx context.Context, h *types.Header) error {
 // syncFinalized backfills from the restored head (or FromBlock on a fresh run)
 // up to the node's finalized block, then saves a finalized checkpoint.
 func (i *Indexer) syncFinalized(ctx context.Context) error {
-	start := time.Now()
-
 	final, err := i.c.HeaderByNumber(ctx, big.NewInt(int64(rpc.FinalizedBlockNumber)))
 	if err != nil {
 		return err
@@ -164,8 +162,6 @@ func (i *Indexer) syncFinalized(ctx context.Context) error {
 	if err := i.promoteCheckpoint(ctx); err != nil {
 		return fmt.Errorf("promote checkpoint: %w", err)
 	}
-
-	i.log("Saved checkpoint", "head", i.head.number, "duration", time.Since(start))
 
 	return nil
 }
