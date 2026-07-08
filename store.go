@@ -1,18 +1,20 @@
 package ethindexer
 
 import (
-	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/klauspost/compress/zstd"
 )
 
-// FileStore implements BlobStore using files in a directory.
+// FileStore implements BlobStore using zstd-compressed files in a directory.
 type FileStore struct {
 	dir string
+	enc *zstd.Encoder
+	dec *zstd.Decoder
 }
 
 var _ BlobStore = (*FileStore)(nil)
@@ -22,30 +24,34 @@ func NewFileStore(dir string) (*FileStore, error) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("creating directory %q: %w", dir, err)
 	}
-	return &FileStore{dir: dir}, nil
+
+	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedBetterCompression))
+	if err != nil {
+		return nil, fmt.Errorf("creating zstd encoder: %w", err)
+	}
+
+	dec, err := zstd.NewReader(nil)
+	if err != nil {
+		enc.Close()
+		return nil, fmt.Errorf("creating zstd decoder: %w", err)
+	}
+
+	return &FileStore{dir: dir, enc: enc, dec: dec}, nil
 }
 
 func (s *FileStore) path(key string) string {
-	return filepath.Join(s.dir, key+".gz")
+	return filepath.Join(s.dir, key+".zst")
 }
 
 func (s *FileStore) Read(_ context.Context, key string) ([]byte, error) {
-	f, err := os.Open(s.path(key))
+	compressed, err := os.ReadFile(s.path(key))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
 		return nil, err
 	}
-	defer func() { _ = f.Close() }()
-
-	gr, err := gzip.NewReader(f)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = gr.Close() }()
-
-	return io.ReadAll(gr)
+	return s.dec.DecodeAll(compressed, nil)
 }
 
 func (s *FileStore) Write(_ context.Context, key string, data []byte) error {
@@ -59,11 +65,8 @@ func (s *FileStore) Write(_ context.Context, key string, data []byte) error {
 		_ = os.Remove(tmpName)
 	}()
 
-	gw := gzip.NewWriter(f)
-	if _, err := gw.Write(data); err != nil {
-		return err
-	}
-	if err := gw.Close(); err != nil {
+	compressed := s.enc.EncodeAll(data, nil)
+	if _, err := f.Write(compressed); err != nil {
 		return err
 	}
 	if err := f.Sync(); err != nil {
