@@ -12,7 +12,7 @@ import (
 var (
 	errInvalidLogs       = errors.New("invalid logs")
 	errInvalidCheckpoint = errors.New("invalid checkpoint")
-	errInvalidVersion    = errors.New("invalid log format version; clear your indexer cache and restart")
+	errInvalidVersion    = errors.New("invalid log format version")
 )
 
 const logsVersion = 1

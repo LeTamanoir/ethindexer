@@ -362,7 +362,7 @@ func (i *Indexer) logsRange(ctx context.Context, from, to uint64) ([]types.Log, 
 			logs, err := unmarshalLogs(bin)
 			if err != nil {
 				if errors.Is(err, errInvalidVersion) {
-					return nil, fmt.Errorf("cached logs format is outdated (%w); clear your indexer cache directory and restart", err)
+					return nil, fmt.Errorf("cached log format is outdated (%w); clear your indexer cache directory and restart", err)
 				}
 				return nil, fmt.Errorf("unmarshal: %w", err)
 			}

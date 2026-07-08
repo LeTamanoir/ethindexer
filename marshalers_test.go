@@ -3,6 +3,7 @@ package ethindexer
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"reflect"
 	"testing"
 
