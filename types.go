@@ -36,6 +36,13 @@ type Handler interface {
 	Process(context.Context, []types.Log) error
 }
 
+// Initer initializes handler state before the first checkpoint on a fresh
+// start.
+type Initer interface {
+	// Init runs once before any logs are processed.
+	Init(ctx context.Context, client ChainReader) error
+}
+
 // ChainReader provides access to Ethereum logs and block headers.
 type ChainReader interface {
 	FilterLogs(context.Context, ethereum.FilterQuery) ([]types.Log, error)

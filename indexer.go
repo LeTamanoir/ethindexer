@@ -80,8 +80,17 @@ func (i *Indexer) Sync(ctx context.Context) error {
 		"max_block_range", i.cfg.MaxBlockRange,
 		"max_concurrent", i.cfg.MaxConcurrency)
 
-	if _, err := i.restoreFinalized(ctx); err != nil {
+	restored, err := i.restoreFinalized(ctx)
+	if err != nil {
 		return err
+	}
+
+	if !restored {
+		if h, ok := i.h.(Initer); ok {
+			if err := h.Init(ctx, i.c); err != nil {
+				return fmt.Errorf("init: %w", err)
+			}
+		}
 	}
 
 	if err := i.syncFinalized(ctx); err != nil {

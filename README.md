@@ -37,6 +37,28 @@ The indexer keeps two checkpoints:
 
 This lets the indexer resume quickly while avoiding committing state that may still be affected by reorgs.
 
+### Handler
+
+Your handler must implement the `Handler` interface. The key methods are:
+
+* **`Filter() Filter`** - specifies which logs to index, including the starting block (`FromBlock`).
+* **`Process(ctx, logs) error`** - called with matching logs in block order.
+* **`Snapshot() ([]byte, error)`** / **`Restore(ctx, []byte) error`** - serialize and deserialize your handler state for checkpointing.
+
+### `Initer` (optional)
+
+If your handler needs to perform setup before syncing begins, you can also implement the optional `Initer` interface:
+
+```go
+type Initer interface {
+    Init(ctx context.Context, client ethindexer.ChainReader) error
+}
+```
+
+`Init` is called once by `Sync` when the indexer has no finalized checkpoint to restore. It runs before any logs are processed and before the first checkpoint is saved.
+
+This is useful when you want to start indexing from a very late block (for example, after a contract upgrade) but still need to reconstruct some pre-upgrade state. Instead of setting `FromBlock` to the contract's original deployment and processing years of logs, set `FromBlock` to the upgrade block and use `Init` to perform heavy one-time setup (RPC calls, database migrations, etc.). Once `Init` succeeds, the indexer saves a checkpoint as usual, so the setup work is not repeated on restart.
+
 ## Development
 
 ```bash

@@ -2,6 +2,7 @@ package ethindexer
 
 import (
 	"context"
+	"errors"
 	"math/big"
 	"testing"
 
@@ -329,5 +330,111 @@ func TestIndexer_Restore(t *testing.T) {
 
 	if indexer.head.number != 50 {
 		t.Errorf("expected head to be 50, got %d", indexer.head.number)
+	}
+}
+
+func TestIndexer_InitCalledOnFreshStart(t *testing.T) {
+	ctx := t.Context()
+
+	finalizedBlockNum := uint64(10)
+
+	client := &mockClient{
+		headerByNumberFunc: func(ctx context.Context, number *big.Int) (*types.Header, error) {
+			return &types.Header{
+				Number: big.NewInt(int64(finalizedBlockNum)),
+			}, nil
+		},
+		filterLogsFunc: func(ctx context.Context, q ethereum.FilterQuery) ([]types.Log, error) {
+			return nil, nil
+		},
+	}
+
+	handler := &mockHandler{filter: Filter{FromBlock: 10}}
+	indexer := NewIndexer(Options{client, handler, newMockStore(), nil, Config{}})
+
+	if err := indexer.Sync(ctx); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !handler.initCalled {
+		t.Error("expected Init to be called on fresh start")
+	}
+	if handler.initClient != client {
+		t.Error("expected Init to receive the indexer client")
+	}
+}
+
+func TestIndexer_InitSkippedOnRestore(t *testing.T) {
+	ctx := t.Context()
+
+	finalizedBlockNum := uint64(50)
+
+	cp := checkpoint{
+		head:  blockRef{number: 50, hash: common.HexToHash("0x123")},
+		state: []byte("restored_state"),
+	}
+	cpb, err := marshalCheckpoint(cp)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store := newMockStore()
+	store.Write(t.Context(), checkpointKey, cpb)
+
+	client := &mockClient{
+		headerByNumberFunc: func(ctx context.Context, number *big.Int) (*types.Header, error) {
+			return &types.Header{
+				Number: big.NewInt(int64(finalizedBlockNum)),
+			}, nil
+		},
+		filterLogsFunc: func(ctx context.Context, q ethereum.FilterQuery) ([]types.Log, error) {
+			return nil, nil
+		},
+	}
+
+	handler := &mockHandler{filter: Filter{FromBlock: 10}}
+	indexer := NewIndexer(Options{client, handler, store, nil, Config{}})
+
+	if err := indexer.Sync(ctx); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if handler.initCalled {
+		t.Error("expected Init to be skipped when a checkpoint is restored")
+	}
+}
+
+func TestIndexer_InitError(t *testing.T) {
+	ctx := t.Context()
+
+	finalizedBlockNum := uint64(10)
+
+	client := &mockClient{
+		headerByNumberFunc: func(ctx context.Context, number *big.Int) (*types.Header, error) {
+			return &types.Header{
+				Number: big.NewInt(int64(finalizedBlockNum)),
+			}, nil
+		},
+		filterLogsFunc: func(ctx context.Context, q ethereum.FilterQuery) ([]types.Log, error) {
+			return nil, nil
+		},
+	}
+
+	wantErr := errors.New("init failed")
+	handler := &mockHandler{filter: Filter{FromBlock: 10}, initErr: wantErr}
+	indexer := NewIndexer(Options{client, handler, newMockStore(), nil, Config{}})
+
+	err := indexer.Sync(ctx)
+	if err == nil {
+		t.Fatal("expected error from Init, got nil")
+	}
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("expected error %v, got %v", wantErr, err)
+	}
+	if !handler.initCalled {
+		t.Error("expected Init to be called before failing")
+	}
+	if indexer.head != nil {
+		t.Error("expected indexer head to remain nil when Init fails")
 	}
 }
