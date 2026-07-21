@@ -43,14 +43,6 @@ func NewWETH() *WETH {
 	}
 }
 
-func (e *WETH) Filter() ethindexer.Filter {
-	return ethindexer.Filter{
-		FromBlock: 4719568,
-		Addresses: []common.Address{common.HexToAddress("0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2")},
-		Topics:    [][]common.Hash{{transferEventID, approvalEventID}},
-	}
-}
-
 func (e *WETH) Restore(_ context.Context, data []byte) error {
 	return gob.NewDecoder(bytes.NewReader(data)).Decode(e)
 }
@@ -156,10 +148,17 @@ func run() error {
 	handler := NewWETH()
 
 	idx, err := ethindexer.OpenContext(ctx, ethindexer.Options{
-		Client:  httpC,
-		Handler: handler,
-		Store:   store,
-		LogFunc: slog.Info,
+		Client: httpC,
+		Store:  store,
+		Filter: ethindexer.Filter{
+			FromBlock: 4719568,
+			Addresses: []common.Address{common.HexToAddress("0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2")},
+			Topics:    [][]common.Hash{{transferEventID, approvalEventID}},
+		},
+		ProcessFunc:  handler.Process,
+		SnapshotFunc: handler.Snapshot,
+		RestoreFunc:  handler.Restore,
+		LogFunc:      slog.Info,
 	})
 	if err != nil {
 		return fmt.Errorf("open indexer: %w", err)

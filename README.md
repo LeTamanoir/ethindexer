@@ -5,7 +5,7 @@
 
 `ethindexer` is a lightweight Go library for indexing Ethereum logs.
 
-It handles backfilling, live indexing, checkpointing, reorg recovery, and resumable restarts so handlers only need to implement application-specific indexing logic.
+It handles backfilling, live indexing, checkpointing, reorg recovery, and resumable restarts so applications only need to provide their indexing callbacks.
 
 ## Install
 
@@ -36,6 +36,39 @@ The indexer keeps two checkpoints:
 * **Staged (`S`)**: pending checkpoint promoted once it is old enough.
 
 This lets the indexer resume quickly while avoiding committing state that may still be affected by reorgs.
+
+### Indexing callbacks
+
+Configure application-specific indexing logic directly through `Options`:
+
+* **`Filter`** specifies which logs to index, including the starting block (`FromBlock`).
+* **`ProcessFunc`** receives matching logs in block order.
+* **`SnapshotFunc`** and **`RestoreFunc`** serialize and deserialize application state for checkpointing.
+* **`InitFunc`** optionally initializes application state on a fresh start.
+
+Stateful methods can be passed as callbacks without implementing an interface:
+
+```go
+state := NewWETH()
+
+idx, err := ethindexer.OpenContext(ctx, ethindexer.Options{
+    Client: client,
+    Store:  store,
+    Filter: ethindexer.Filter{
+        FromBlock: deploymentBlock,
+        Addresses: []common.Address{contractAddress},
+    },
+    ProcessFunc:  state.Process,
+    SnapshotFunc: state.Snapshot,
+    RestoreFunc:  state.Restore,
+})
+```
+
+`InitFunc`, when set, is called once by `Sync` when the indexer has no finalized checkpoint to restore. It runs before any logs are processed and before the first checkpoint is saved.
+
+This is useful when you want to start indexing from a very late block (for example, after a contract upgrade) but still need to reconstruct some pre-upgrade state. Instead of setting `FromBlock` to the contract's original deployment and processing years of logs, set `FromBlock` to the upgrade block and use `InitFunc` to perform heavy one-time setup (RPC calls, database migrations, etc.). Once initialization succeeds, the indexer saves a checkpoint as usual, so the setup work is not repeated on restart.
+
+Indexer tunables such as `FinalityDepth`, `MaxBlockRange`, `CheckpointInterval`, and `MaxConcurrency` are also set directly on `Options`.
 
 ## Development
 

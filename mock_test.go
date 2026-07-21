@@ -37,6 +37,9 @@ type mockHandler struct {
 	processErr  error
 	snapshotErr error
 	restoreErr  error
+	initCalled  bool
+	initErr     error
+	initClient  ChainReader
 }
 
 func (m *mockHandler) Filter() Filter {
@@ -66,6 +69,26 @@ func (m *mockHandler) Process(ctx context.Context, logs []types.Log) error {
 	}
 	m.processed = append(m.processed, logs...)
 	return nil
+}
+
+func (m *mockHandler) Init(ctx context.Context, client ChainReader) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.initCalled = true
+	m.initClient = client
+	return m.initErr
+}
+
+func optionsForHandler(client ChainReader, handler *mockHandler, store BlobStore) Options {
+	return Options{
+		Client:       client,
+		Store:        store,
+		Filter:       handler.Filter(),
+		InitFunc:     handler.Init,
+		ProcessFunc:  handler.Process,
+		SnapshotFunc: handler.Snapshot,
+		RestoreFunc:  handler.Restore,
+	}
 }
 
 type mockStore struct {
