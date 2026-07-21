@@ -2,7 +2,6 @@ package ethindexer
 
 import (
 	"context"
-	"errors"
 	"math/big"
 	"sync"
 
@@ -39,7 +38,7 @@ type mockHandler struct {
 	restoreErr  error
 	initCalled  bool
 	initErr     error
-	initClient  ChainReader
+	initClient  *CachedClient
 }
 
 func (m *mockHandler) Filter() Filter {
@@ -71,7 +70,7 @@ func (m *mockHandler) Process(ctx context.Context, logs []types.Log) error {
 	return nil
 }
 
-func (m *mockHandler) Init(ctx context.Context, client ChainReader) error {
+func (m *mockHandler) Init(ctx context.Context, client *CachedClient) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.initCalled = true
@@ -79,54 +78,15 @@ func (m *mockHandler) Init(ctx context.Context, client ChainReader) error {
 	return m.initErr
 }
 
-func optionsForHandler(client ChainReader, handler *mockHandler, store BlobStore) Options {
-	return Options{
+func indexerForHandler(client ChainReader, handler *mockHandler, dataDir string, fromBlock uint64) *Indexer {
+	return &Indexer{
 		Client:       client,
-		Store:        store,
+		DataDir:      dataDir,
+		FromBlock:    fromBlock,
 		Filter:       handler.Filter(),
 		InitFunc:     handler.Init,
 		ProcessFunc:  handler.Process,
 		SnapshotFunc: handler.Snapshot,
 		RestoreFunc:  handler.Restore,
 	}
-}
-
-type mockStore struct {
-	mu    sync.Mutex
-	store map[string][]byte
-}
-
-func newMockStore() *mockStore {
-	return &mockStore{
-		store: make(map[string][]byte),
-	}
-}
-
-func (m *mockStore) Read(_ context.Context, name string) ([]byte, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	val, ok := m.store[name]
-	if !ok {
-		return nil, nil
-	}
-	return val, nil
-}
-
-func (m *mockStore) Write(_ context.Context, name string, data []byte) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.store[name] = data
-	return nil
-}
-
-func (m *mockStore) Move(_ context.Context, srcKey, dstKey string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	val, ok := m.store[srcKey]
-	if !ok {
-		return errors.New("source key not found")
-	}
-	m.store[dstKey] = val
-	delete(m.store, srcKey)
-	return nil
 }

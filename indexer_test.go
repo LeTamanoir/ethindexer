@@ -36,10 +36,9 @@ func TestIndexer_Backfill(t *testing.T) {
 		},
 	}
 
-	filter := Filter{FromBlock: 50}
-	handler := &mockHandler{filter: filter}
+	handler := &mockHandler{}
 
-	indexer := NewIndexer(optionsForHandler(client, handler, newMockStore()))
+	indexer := indexerForHandler(client, handler, t.TempDir(), 50)
 	if err := indexer.Sync(ctx); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -73,10 +72,9 @@ func TestIndexer_Live(t *testing.T) {
 		},
 	}
 
-	filter := Filter{FromBlock: 10}
-	handler := &mockHandler{filter: filter}
+	handler := &mockHandler{}
 
-	indexer := NewIndexer(optionsForHandler(client, handler, newMockStore()))
+	indexer := indexerForHandler(client, handler, t.TempDir(), 10)
 	if err := indexer.Sync(ctx); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -113,14 +111,12 @@ func TestIndexer_Promote(t *testing.T) {
 		},
 	}
 
-	filter := Filter{FromBlock: 10}
-	handler := &mockHandler{filter: filter}
-	store := newMockStore()
+	handler := &mockHandler{}
+	dataDir := t.TempDir()
 
-	opts := optionsForHandler(client, handler, store)
-	opts.FinalityDepth = 2
-	opts.CheckpointInterval = 1
-	indexer := NewIndexer(opts)
+	indexer := indexerForHandler(client, handler, dataDir, 10)
+	indexer.FinalityDepth = 2
+	indexer.CheckpointInterval = 1
 	if err := indexer.Sync(ctx); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -138,7 +134,7 @@ func TestIndexer_Promote(t *testing.T) {
 
 	// Head 13 >= staged(11) + finalityDepth(2), so the staged checkpoint
 	// at head 11 should have been promoted to finalized via Move.
-	cpb, err := store.Read(ctx, checkpointKey)
+	cpb, err := readBlob(dataDir, checkpointKey)
 	if err != nil {
 		t.Fatalf("load finalized: %v", err)
 	}
@@ -154,7 +150,7 @@ func TestIndexer_Promote(t *testing.T) {
 	}
 
 	// The staged key should be gone after the move.
-	if d, err := store.Read(ctx, checkpointStagedKey); err != nil {
+	if d, err := readBlob(dataDir, checkpointStagedKey); err != nil {
 		t.Fatalf("unexpected error loading staged: %v", err)
 	} else if d != nil {
 		t.Errorf("expected staged checkpoint to be moved away, got %d bytes", len(d))
@@ -183,14 +179,12 @@ func TestIndexer_PromoteGuardNoStaged(t *testing.T) {
 		},
 	}
 
-	filter := Filter{FromBlock: 100}
-	handler := &mockHandler{filter: filter}
-	store := newMockStore()
+	handler := &mockHandler{}
+	dataDir := t.TempDir()
 
-	opts := optionsForHandler(client, handler, store)
-	opts.FinalityDepth = 2
-	opts.CheckpointInterval = 1
-	indexer := NewIndexer(opts)
+	indexer := indexerForHandler(client, handler, dataDir, 100)
+	indexer.FinalityDepth = 2
+	indexer.CheckpointInterval = 1
 	if err := indexer.Sync(ctx); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -245,10 +239,9 @@ func TestIndexer_Reorg(t *testing.T) {
 		},
 	}
 
-	filter := Filter{FromBlock: 10}
-	handler := &mockHandler{filter: filter}
+	handler := &mockHandler{}
 
-	store := newMockStore()
+	dataDir := t.TempDir()
 
 	// Save a finalized checkpoint so Process can recover from a reorg.
 	cp := checkpoint{
@@ -259,11 +252,11 @@ func TestIndexer_Reorg(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Write(t.Context(), checkpointKey, cpb); err != nil {
+	if err := writeBlob(dataDir, checkpointKey, cpb); err != nil {
 		t.Fatal(err)
 	}
 
-	indexer := NewIndexer(optionsForHandler(client, handler, store))
+	indexer := indexerForHandler(client, handler, dataDir, 10)
 	if err := indexer.Sync(ctx); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -308,8 +301,10 @@ func TestIndexer_Restore(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store := newMockStore()
-	store.Write(t.Context(), checkpointKey, cpb)
+	dataDir := t.TempDir()
+	if err := writeBlob(dataDir, checkpointKey, cpb); err != nil {
+		t.Fatal(err)
+	}
 
 	client := &mockClient{
 		headerByNumberFunc: func(ctx context.Context, number *big.Int) (*types.Header, error) {
@@ -322,10 +317,9 @@ func TestIndexer_Restore(t *testing.T) {
 		},
 	}
 
-	filter := Filter{FromBlock: 10}
-	handler := &mockHandler{filter: filter}
+	handler := &mockHandler{}
 
-	indexer := NewIndexer(optionsForHandler(client, handler, store))
+	indexer := indexerForHandler(client, handler, dataDir, 10)
 	if err := indexer.Sync(ctx); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -355,8 +349,8 @@ func TestIndexer_InitCalledOnFreshStart(t *testing.T) {
 		},
 	}
 
-	handler := &mockHandler{filter: Filter{FromBlock: 10}}
-	indexer := NewIndexer(optionsForHandler(client, handler, newMockStore()))
+	handler := &mockHandler{}
+	indexer := indexerForHandler(client, handler, t.TempDir(), 10)
 
 	if err := indexer.Sync(ctx); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -365,8 +359,11 @@ func TestIndexer_InitCalledOnFreshStart(t *testing.T) {
 	if !handler.initCalled {
 		t.Error("expected Init to be called on fresh start")
 	}
-	if handler.initClient != client {
-		t.Error("expected Init to receive the indexer client")
+	if handler.initClient == nil {
+		t.Fatal("expected Init to receive a cached client")
+	}
+	if handler.initClient.client != client || handler.initClient.dataDir != indexer.DataDir {
+		t.Error("expected cached client to wrap the indexer's client and data directory")
 	}
 }
 
@@ -384,8 +381,10 @@ func TestIndexer_InitSkippedOnRestore(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store := newMockStore()
-	store.Write(t.Context(), checkpointKey, cpb)
+	dataDir := t.TempDir()
+	if err := writeBlob(dataDir, checkpointKey, cpb); err != nil {
+		t.Fatal(err)
+	}
 
 	client := &mockClient{
 		headerByNumberFunc: func(ctx context.Context, number *big.Int) (*types.Header, error) {
@@ -398,8 +397,8 @@ func TestIndexer_InitSkippedOnRestore(t *testing.T) {
 		},
 	}
 
-	handler := &mockHandler{filter: Filter{FromBlock: 10}}
-	indexer := NewIndexer(optionsForHandler(client, handler, store))
+	handler := &mockHandler{}
+	indexer := indexerForHandler(client, handler, dataDir, 10)
 
 	if err := indexer.Sync(ctx); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -427,8 +426,8 @@ func TestIndexer_InitError(t *testing.T) {
 	}
 
 	wantErr := errors.New("init failed")
-	handler := &mockHandler{filter: Filter{FromBlock: 10}, initErr: wantErr}
-	indexer := NewIndexer(optionsForHandler(client, handler, newMockStore()))
+	handler := &mockHandler{initErr: wantErr}
+	indexer := indexerForHandler(client, handler, t.TempDir(), 10)
 
 	err := indexer.Sync(ctx)
 	if err == nil {
