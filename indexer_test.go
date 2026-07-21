@@ -36,10 +36,9 @@ func TestIndexer_Backfill(t *testing.T) {
 		},
 	}
 
-	filter := Filter{FromBlock: 50}
-	handler := &mockHandler{filter: filter}
+	handler := &mockHandler{}
 
-	indexer := NewIndexer(optionsForHandler(client, handler, newMockStore()))
+	indexer := NewIndexer(optionsForHandler(client, handler, newMockStore(), 50))
 	if err := indexer.Sync(ctx); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -73,10 +72,9 @@ func TestIndexer_Live(t *testing.T) {
 		},
 	}
 
-	filter := Filter{FromBlock: 10}
-	handler := &mockHandler{filter: filter}
+	handler := &mockHandler{}
 
-	indexer := NewIndexer(optionsForHandler(client, handler, newMockStore()))
+	indexer := NewIndexer(optionsForHandler(client, handler, newMockStore(), 10))
 	if err := indexer.Sync(ctx); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -113,11 +111,10 @@ func TestIndexer_Promote(t *testing.T) {
 		},
 	}
 
-	filter := Filter{FromBlock: 10}
-	handler := &mockHandler{filter: filter}
+	handler := &mockHandler{}
 	store := newMockStore()
 
-	opts := optionsForHandler(client, handler, store)
+	opts := optionsForHandler(client, handler, store, 10)
 	opts.FinalityDepth = 2
 	opts.CheckpointInterval = 1
 	indexer := NewIndexer(opts)
@@ -183,11 +180,10 @@ func TestIndexer_PromoteGuardNoStaged(t *testing.T) {
 		},
 	}
 
-	filter := Filter{FromBlock: 100}
-	handler := &mockHandler{filter: filter}
+	handler := &mockHandler{}
 	store := newMockStore()
 
-	opts := optionsForHandler(client, handler, store)
+	opts := optionsForHandler(client, handler, store, 100)
 	opts.FinalityDepth = 2
 	opts.CheckpointInterval = 1
 	indexer := NewIndexer(opts)
@@ -245,8 +241,7 @@ func TestIndexer_Reorg(t *testing.T) {
 		},
 	}
 
-	filter := Filter{FromBlock: 10}
-	handler := &mockHandler{filter: filter}
+	handler := &mockHandler{}
 
 	store := newMockStore()
 
@@ -263,7 +258,7 @@ func TestIndexer_Reorg(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	indexer := NewIndexer(optionsForHandler(client, handler, store))
+	indexer := NewIndexer(optionsForHandler(client, handler, store, 10))
 	if err := indexer.Sync(ctx); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -322,10 +317,9 @@ func TestIndexer_Restore(t *testing.T) {
 		},
 	}
 
-	filter := Filter{FromBlock: 10}
-	handler := &mockHandler{filter: filter}
+	handler := &mockHandler{}
 
-	indexer := NewIndexer(optionsForHandler(client, handler, store))
+	indexer := NewIndexer(optionsForHandler(client, handler, store, 10))
 	if err := indexer.Sync(ctx); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -355,8 +349,8 @@ func TestIndexer_InitCalledOnFreshStart(t *testing.T) {
 		},
 	}
 
-	handler := &mockHandler{filter: Filter{FromBlock: 10}}
-	indexer := NewIndexer(optionsForHandler(client, handler, newMockStore()))
+	handler := &mockHandler{}
+	indexer := NewIndexer(optionsForHandler(client, handler, newMockStore(), 10))
 
 	if err := indexer.Sync(ctx); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -398,8 +392,8 @@ func TestIndexer_InitSkippedOnRestore(t *testing.T) {
 		},
 	}
 
-	handler := &mockHandler{filter: Filter{FromBlock: 10}}
-	indexer := NewIndexer(optionsForHandler(client, handler, store))
+	handler := &mockHandler{}
+	indexer := NewIndexer(optionsForHandler(client, handler, store, 10))
 
 	if err := indexer.Sync(ctx); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -427,8 +421,8 @@ func TestIndexer_InitError(t *testing.T) {
 	}
 
 	wantErr := errors.New("init failed")
-	handler := &mockHandler{filter: Filter{FromBlock: 10}, initErr: wantErr}
-	indexer := NewIndexer(optionsForHandler(client, handler, newMockStore()))
+	handler := &mockHandler{initErr: wantErr}
+	indexer := NewIndexer(optionsForHandler(client, handler, newMockStore(), 10))
 
 	err := indexer.Sync(ctx)
 	if err == nil {

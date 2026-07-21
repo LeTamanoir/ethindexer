@@ -79,10 +79,11 @@ func (m *mockHandler) Init(ctx context.Context, client ChainReader) error {
 	return m.initErr
 }
 
-func optionsForHandler(client ChainReader, handler *mockHandler, store BlobStore) Options {
+func optionsForHandler(client ChainReader, handler *mockHandler, store BlobStore, fromBlock uint64) Options {
 	return Options{
 		Client:       client,
 		Store:        store,
+		FromBlock:    fromBlock,
 		Filter:       handler.Filter(),
 		InitFunc:     handler.Init,
 		ProcessFunc:  handler.Process,

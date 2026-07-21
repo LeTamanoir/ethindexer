@@ -42,9 +42,6 @@ type BlobStore interface {
 
 // Filter specifies which logs the indexer fetches.
 type Filter struct {
-	// FromBlock is the first block to index.
-	FromBlock uint64
-
 	// Addresses restrict logs to the given contract addresses.
 	// See [ethereum.FilterQuery.Addresses].
 	Addresses []common.Address
@@ -80,6 +77,9 @@ type Options struct {
 
 	// Store persists checkpoints and cached log batches.
 	Store BlobStore
+
+	// FromBlock is the first block to index.
+	FromBlock uint64
 
 	// Filter specifies which logs the indexer fetches.
 	Filter Filter

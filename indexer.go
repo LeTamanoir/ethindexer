@@ -140,7 +140,7 @@ func (i *Indexer) syncFinalized(ctx context.Context) error {
 		return err
 	}
 
-	from := i.opts.Filter.FromBlock
+	from := i.opts.FromBlock
 	if i.head != nil {
 		from = i.head.number + 1
 	}
