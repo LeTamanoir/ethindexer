@@ -79,6 +79,18 @@ func (m *mockHandler) Init(ctx context.Context, client ChainReader) error {
 	return m.initErr
 }
 
+func optionsForHandler(client ChainReader, handler *mockHandler, store BlobStore) Options {
+	return Options{
+		Client:       client,
+		Store:        store,
+		Filter:       handler.Filter(),
+		InitFunc:     handler.Init,
+		ProcessFunc:  handler.Process,
+		SnapshotFunc: handler.Snapshot,
+		RestoreFunc:  handler.Restore,
+	}
+}
+
 type mockStore struct {
 	mu    sync.Mutex
 	store map[string][]byte

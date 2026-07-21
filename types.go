@@ -21,28 +21,6 @@ type blockRef struct {
 	hash   common.Hash
 }
 
-// Handler defines the application-specific indexing logic.
-type Handler interface {
-	// Filter specifies which logs the indexer fetches.
-	Filter() Filter
-
-	// Snapshot returns the current handler state.
-	Snapshot(context.Context) ([]byte, error)
-
-	// Restore restores a previously captured state.
-	Restore(context.Context, []byte) error
-
-	// Process applies matching logs in block order.
-	Process(context.Context, []types.Log) error
-}
-
-// Initer initializes handler state before the first checkpoint on a fresh
-// start.
-type Initer interface {
-	// Init runs once before any logs are processed.
-	Init(ctx context.Context, client ChainReader) error
-}
-
 // ChainReader provides access to Ethereum logs and block headers.
 type ChainReader interface {
 	FilterLogs(context.Context, ethereum.FilterQuery) ([]types.Log, error)
@@ -100,20 +78,27 @@ type Options struct {
 	// Client provides access to Ethereum logs and block headers.
 	Client ChainReader
 
-	// Handler receives logs and owns the indexed state.
-	Handler Handler
-
 	// Store persists checkpoints and cached log batches.
 	Store BlobStore
+
+	// Filter specifies which logs the indexer fetches.
+	Filter Filter
+
+	// InitFunc optionally initializes application state on a fresh start.
+	InitFunc func(context.Context, ChainReader) error
+
+	// ProcessFunc applies matching logs in block order.
+	ProcessFunc func(context.Context, []types.Log) error
+
+	// SnapshotFunc returns the current application state.
+	SnapshotFunc func(context.Context) ([]byte, error)
+
+	// RestoreFunc restores previously captured application state.
+	RestoreFunc func(context.Context, []byte) error
 
 	// LogFunc receives indexer log events.
 	LogFunc func(msg string, args ...any)
 
-	Config Config
-}
-
-// Config holds the indexer's tunables.
-type Config struct {
 	// MaxBlockRange is the maximum block span per backfill request.
 	MaxBlockRange uint64
 
@@ -127,17 +112,20 @@ type Config struct {
 	MaxConcurrency int
 }
 
-func (c *Config) applyDefaults() {
-	if c.MaxBlockRange == 0 {
-		c.MaxBlockRange = 10_000
+func (o *Options) applyDefaults() {
+	if o.LogFunc == nil {
+		o.LogFunc = func(string, ...any) {}
 	}
-	if c.FinalityDepth == 0 {
-		c.FinalityDepth = 64
+	if o.MaxBlockRange == 0 {
+		o.MaxBlockRange = 10_000
 	}
-	if c.CheckpointInterval == 0 {
-		c.CheckpointInterval = 10_000
+	if o.FinalityDepth == 0 {
+		o.FinalityDepth = 64
 	}
-	if c.MaxConcurrency == 0 {
-		c.MaxConcurrency = 16
+	if o.CheckpointInterval == 0 {
+		o.CheckpointInterval = 10_000
+	}
+	if o.MaxConcurrency == 0 {
+		o.MaxConcurrency = 16
 	}
 }
