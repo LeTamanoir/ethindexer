@@ -2,7 +2,6 @@ package ethindexer
 
 import (
 	"compress/gzip"
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -10,27 +9,14 @@ import (
 	"path/filepath"
 )
 
-// FileStore implements BlobStore using files in a directory.
-type FileStore struct {
-	dir string
+func blobPath(dir, key string) string {
+	return filepath.Join(dir, key+".gz")
 }
 
-var _ BlobStore = (*FileStore)(nil)
-
-// NewFileStore creates a FileStore rooted at dir.
-func NewFileStore(dir string) (*FileStore, error) {
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return nil, fmt.Errorf("creating directory %q: %w", dir, err)
-	}
-	return &FileStore{dir: dir}, nil
-}
-
-func (s *FileStore) path(key string) string {
-	return filepath.Join(s.dir, key+".gz")
-}
-
-func (s *FileStore) Read(_ context.Context, key string) ([]byte, error) {
-	f, err := os.Open(s.path(key))
+// readBlob reads and decompresses the blob stored under key. A missing key
+// returns (nil, nil).
+func readBlob(dir, key string) ([]byte, error) {
+	f, err := os.Open(blobPath(dir, key))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
@@ -48,8 +34,13 @@ func (s *FileStore) Read(_ context.Context, key string) ([]byte, error) {
 	return io.ReadAll(gr)
 }
 
-func (s *FileStore) Write(_ context.Context, key string, data []byte) error {
-	f, err := os.CreateTemp(s.dir, ".tmp-*")
+// writeBlob compresses and atomically stores data under key.
+func writeBlob(dir, key string, data []byte) error {
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("create data directory %q: %w", dir, err)
+	}
+
+	f, err := os.CreateTemp(dir, ".tmp-*")
 	if err != nil {
 		return err
 	}
@@ -69,9 +60,10 @@ func (s *FileStore) Write(_ context.Context, key string, data []byte) error {
 	if err := f.Sync(); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, s.path(key))
+	return os.Rename(tmpName, blobPath(dir, key))
 }
 
-func (s *FileStore) Move(_ context.Context, srcKey, dstKey string) error {
-	return os.Rename(s.path(srcKey), s.path(dstKey))
+// moveBlob atomically transfers a blob from srcKey to dstKey.
+func moveBlob(dir, srcKey, dstKey string) error {
+	return os.Rename(blobPath(dir, srcKey), blobPath(dir, dstKey))
 }

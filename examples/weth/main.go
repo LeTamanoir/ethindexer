@@ -140,18 +140,13 @@ func run() error {
 		return err
 	}
 
-	store, err := ethindexer.NewFileStore(".weth_indexer")
-	if err != nil {
-		return fmt.Errorf("new store: %w", err)
-	}
-
 	handler := NewWETH()
 
-	idx, err := ethindexer.OpenContext(ctx, ethindexer.Options{
-		Client: httpC,
-		Store:  store,
+	idx := &ethindexer.Indexer{
+		Client:    httpC,
+		DataDir:   ".weth_indexer",
+		FromBlock: 4719568,
 		Filter: ethindexer.Filter{
-			FromBlock: 4719568,
 			Addresses: []common.Address{common.HexToAddress("0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2")},
 			Topics:    [][]common.Hash{{transferEventID, approvalEventID}},
 		},
@@ -159,9 +154,9 @@ func run() error {
 		SnapshotFunc: handler.Snapshot,
 		RestoreFunc:  handler.Restore,
 		LogFunc:      slog.Info,
-	})
-	if err != nil {
-		return fmt.Errorf("open indexer: %w", err)
+	}
+	if err := idx.Sync(ctx); err != nil {
+		return fmt.Errorf("sync indexer: %w", err)
 	}
 
 	heads := make(chan *types.Header, 128)

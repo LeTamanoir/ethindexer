@@ -27,19 +27,6 @@ type ChainReader interface {
 	HeaderByNumber(context.Context, *big.Int) (*types.Header, error)
 }
 
-// BlobStore provides keyed byte storage.
-type BlobStore interface {
-	// Read returns the data stored under key. A missing key returns (nil, nil).
-	Read(ctx context.Context, key string) ([]byte, error)
-
-	// Write stores data under key, replacing any existing value.
-	Write(ctx context.Context, key string, blob []byte) error
-
-	// Move atomically transfers data from srcKey to dstKey, replacing any
-	// existing value under dstKey.
-	Move(ctx context.Context, srcKey, dstKey string) error
-}
-
 // Filter specifies which logs the indexer fetches.
 type Filter struct {
 	// Addresses restrict logs to the given contract addresses.
@@ -67,65 +54,5 @@ func (f Filter) blockQuery(hash common.Hash) ethereum.FilterQuery {
 		BlockHash: &hash,
 		Addresses: f.Addresses,
 		Topics:    f.Topics,
-	}
-}
-
-// Options configures an Indexer.
-type Options struct {
-	// Client provides access to Ethereum logs and block headers.
-	Client ChainReader
-
-	// Store persists checkpoints and cached log batches.
-	Store BlobStore
-
-	// FromBlock is the first block to index.
-	FromBlock uint64
-
-	// Filter specifies which logs the indexer fetches.
-	Filter Filter
-
-	// InitFunc optionally initializes application state on a fresh start.
-	InitFunc func(context.Context, ChainReader) error
-
-	// ProcessFunc applies matching logs in block order.
-	ProcessFunc func(context.Context, []types.Log) error
-
-	// SnapshotFunc returns the current application state.
-	SnapshotFunc func(context.Context) ([]byte, error)
-
-	// RestoreFunc restores previously captured application state.
-	RestoreFunc func(context.Context, []byte) error
-
-	// LogFunc receives indexer log events.
-	LogFunc func(msg string, args ...any)
-
-	// MaxBlockRange is the maximum block span per backfill request.
-	MaxBlockRange uint64
-
-	// FinalityDepth is the block depth considered finalized.
-	FinalityDepth uint64
-
-	// CheckpointInterval is the minimum number of blocks between staged checkpoints.
-	CheckpointInterval uint64
-
-	// MaxConcurrency bounds concurrent header fetches.
-	MaxConcurrency int
-}
-
-func (o *Options) applyDefaults() {
-	if o.LogFunc == nil {
-		o.LogFunc = func(string, ...any) {}
-	}
-	if o.MaxBlockRange == 0 {
-		o.MaxBlockRange = 10_000
-	}
-	if o.FinalityDepth == 0 {
-		o.FinalityDepth = 64
-	}
-	if o.CheckpointInterval == 0 {
-		o.CheckpointInterval = 10_000
-	}
-	if o.MaxConcurrency == 0 {
-		o.MaxConcurrency = 16
 	}
 }

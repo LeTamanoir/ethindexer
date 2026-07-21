@@ -6,19 +6,15 @@ import (
 	"testing"
 )
 
-func TestFileStore_WriteRead(t *testing.T) {
-	dir := t.TempDir()
-	store, err := NewFileStore(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestBlob_WriteRead(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "data")
 
 	data := []byte("hello world")
-	if err := store.Write(t.Context(), "testkey", data); err != nil {
+	if err := writeBlob(dir, "testkey", data); err != nil {
 		t.Fatalf("failed to save: %v", err)
 	}
 
-	loaded, err := store.Read(t.Context(), "testkey")
+	loaded, err := readBlob(dir, "testkey")
 	if err != nil {
 		t.Fatalf("failed to load: %v", err)
 	}
@@ -30,14 +26,10 @@ func TestFileStore_WriteRead(t *testing.T) {
 	}
 }
 
-func TestFileStore_ReadNotFound(t *testing.T) {
+func TestBlob_ReadNotFound(t *testing.T) {
 	dir := t.TempDir()
-	store, err := NewFileStore(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
 
-	loaded, err := store.Read(t.Context(), "missingkey")
+	loaded, err := readBlob(dir, "missingkey")
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
@@ -46,22 +38,18 @@ func TestFileStore_ReadNotFound(t *testing.T) {
 	}
 }
 
-func TestFileStore_Move(t *testing.T) {
+func TestBlob_Move(t *testing.T) {
 	dir := t.TempDir()
-	store, err := NewFileStore(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
 
-	if err := store.Write(t.Context(), "src", []byte("hello")); err != nil {
+	if err := writeBlob(dir, "src", []byte("hello")); err != nil {
 		t.Fatalf("failed to save: %v", err)
 	}
 
-	if err := store.Move(t.Context(), "src", "dst"); err != nil {
+	if err := moveBlob(dir, "src", "dst"); err != nil {
 		t.Fatalf("failed to move: %v", err)
 	}
 
-	loaded, err := store.Read(t.Context(), "dst")
+	loaded, err := readBlob(dir, "dst")
 	if err != nil {
 		t.Fatalf("failed to load moved data: %v", err)
 	}
@@ -74,14 +62,10 @@ func TestFileStore_Move(t *testing.T) {
 	}
 }
 
-func TestFileStore_MoveMissingSource(t *testing.T) {
+func TestBlob_MoveMissingSource(t *testing.T) {
 	dir := t.TempDir()
-	store, err := NewFileStore(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
 
-	if err := store.Move(t.Context(), "missing", "dst"); err == nil {
+	if err := moveBlob(dir, "missing", "dst"); err == nil {
 		t.Fatal("expected error moving missing source, got nil")
 	}
 }
