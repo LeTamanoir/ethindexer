@@ -359,11 +359,11 @@ func TestIndexer_InitCalledOnFreshStart(t *testing.T) {
 	if !handler.initCalled {
 		t.Error("expected Init to be called on fresh start")
 	}
-	if handler.initClient == nil {
-		t.Fatal("expected Init to receive a cached client")
+	if handler.initClient != client {
+		t.Error("expected Init to receive the configured client unchanged")
 	}
-	if handler.initClient.client != client || handler.initClient.dataDir != indexer.DataDir {
-		t.Error("expected cached client to wrap the indexer's client and data directory")
+	if handler.initLogs == nil {
+		t.Error("expected Init to receive a logs range function")
 	}
 }
 
@@ -441,5 +441,30 @@ func TestIndexer_InitError(t *testing.T) {
 	}
 	if indexer.head != nil {
 		t.Error("expected indexer head to remain nil when Init fails")
+	}
+}
+
+func TestIndexer_LogsRangeCachesQueries(t *testing.T) {
+	filterCalls := 0
+	client := &mockClient{
+		filterLogsFunc: func(context.Context, ethereum.FilterQuery) ([]types.Log, error) {
+			filterCalls++
+			return []types.Log{{BlockNumber: 12}}, nil
+		},
+	}
+	indexer := &Indexer{Client: client, DataDir: t.TempDir()}
+
+	for range 2 {
+		logs, err := indexer.logsRange(t.Context(), Filter{}, 10, 20)
+		if err != nil {
+			t.Fatalf("logs range: %v", err)
+		}
+		if len(logs) != 1 || logs[0].BlockNumber != 12 {
+			t.Fatalf("unexpected logs: %+v", logs)
+		}
+	}
+
+	if filterCalls != 1 {
+		t.Fatalf("expected one underlying log query, got %d", filterCalls)
 	}
 }

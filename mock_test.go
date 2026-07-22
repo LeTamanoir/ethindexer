@@ -38,7 +38,8 @@ type mockHandler struct {
 	restoreErr  error
 	initCalled  bool
 	initErr     error
-	initClient  *CachedClient
+	initClient  ChainReader
+	initLogs    LogsRangeFunc
 }
 
 func (m *mockHandler) Filter() Filter {
@@ -70,11 +71,12 @@ func (m *mockHandler) Process(ctx context.Context, logs []types.Log) error {
 	return nil
 }
 
-func (m *mockHandler) Init(ctx context.Context, client *CachedClient) error {
+func (m *mockHandler) Init(ctx context.Context, client ChainReader, logsRange LogsRangeFunc) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.initCalled = true
 	m.initClient = client
+	m.initLogs = logsRange
 	return m.initErr
 }
 
