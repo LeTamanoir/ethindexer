@@ -2,11 +2,15 @@ package ethindexer
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/big"
 	"time"
 
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/rpc"
 	"golang.org/x/sync/errgroup"
@@ -31,8 +35,10 @@ type Indexer struct {
 	// Filter specifies which logs the indexer fetches.
 	Filter Filter
 
-	// InitFunc optionally initializes application state with cached chain access on a fresh start.
-	InitFunc func(context.Context, *CachedClient) error
+	// InitFunc optionally initializes application state on a fresh start. It
+	// receives Client and a LogsRangeFunc that caches block-range queries in
+	// DataDir.
+	InitFunc func(context.Context, ChainReader, LogsRangeFunc) error
 
 	// ProcessFunc applies matching logs in block order.
 	ProcessFunc func(context.Context, []types.Log) error
@@ -112,17 +118,15 @@ func (i *Indexer) Sync(ctx context.Context) error {
 		return err
 	}
 
-	cc := &CachedClient{client: i.Client, dataDir: i.DataDir}
-
 	if !restored {
 		if i.InitFunc != nil {
-			if err := i.InitFunc(ctx, cc); err != nil {
+			if err := i.InitFunc(ctx, i.Client, i.logsRange); err != nil {
 				return fmt.Errorf("init: %w", err)
 			}
 		}
 	}
 
-	if err := i.syncFinalized(ctx, cc); err != nil {
+	if err := i.syncFinalized(ctx); err != nil {
 		return err
 	}
 
@@ -170,8 +174,8 @@ func (i *Indexer) Process(ctx context.Context, h *types.Header) error {
 
 // syncFinalized backfills from the restored head (or FromBlock on a fresh run)
 // up to the node's finalized block, then saves a finalized checkpoint.
-func (i *Indexer) syncFinalized(ctx context.Context, client *CachedClient) error {
-	final, err := client.HeaderByNumber(ctx, big.NewInt(int64(rpc.FinalizedBlockNumber)))
+func (i *Indexer) syncFinalized(ctx context.Context) error {
+	final, err := i.Client.HeaderByNumber(ctx, big.NewInt(int64(rpc.FinalizedBlockNumber)))
 	if err != nil {
 		return err
 	}
@@ -188,7 +192,7 @@ func (i *Indexer) syncFinalized(ctx context.Context, client *CachedClient) error
 		return nil
 	}
 
-	if err := i.backfillFinalized(ctx, client, from, to); err != nil {
+	if err := i.backfillFinalized(ctx, from, to); err != nil {
 		return fmt.Errorf("backfill: %w", err)
 	}
 
@@ -383,12 +387,44 @@ func (i *Indexer) headersRange(ctx context.Context, from, to uint64) ([]*types.H
 	return heads, nil
 }
 
+func (i *Indexer) logsRange(ctx context.Context, filter Filter, from, to uint64) ([]types.Log, error) {
+	q := filter.rangeQuery(from, to)
+	key := logsCacheKey(q)
+
+	bin, err := readBlob(i.DataDir, key)
+	if err != nil {
+		return nil, fmt.Errorf("read cache: %w", err)
+	}
+	if len(bin) > 0 {
+		logs, err := unmarshalLogs(bin)
+		if err != nil {
+			return nil, fmt.Errorf("unmarshal: %w", err)
+		}
+		return logs, nil
+	}
+
+	logs, err := i.Client.FilterLogs(ctx, q)
+	if err != nil {
+		return nil, fmt.Errorf("filter logs: %w", err)
+	}
+
+	bin, err = marshalLogs(logs)
+	if err != nil {
+		return nil, fmt.Errorf("marshal: %w", err)
+	}
+	if err := writeBlob(i.DataDir, key, bin); err != nil {
+		return nil, fmt.Errorf("write cache: %w", err)
+	}
+
+	return logs, nil
+}
+
 // backfillFinalized fetches and processes logs over [from, to] in chunks.
 //
 // The range is assumed to be finalized, allowing logs to be queried by block
 // range with FilterLogs instead of by block hash. This is more efficient but
 // does not provide reorg safety.
-func (i *Indexer) backfillFinalized(ctx context.Context, client *CachedClient, from, to uint64) error {
+func (i *Indexer) backfillFinalized(ctx context.Context, from, to uint64) error {
 	chunks := chunkBlockRange(from, to, i.MaxBlockRange)
 
 	start := time.Now()
@@ -398,7 +434,7 @@ func (i *Indexer) backfillFinalized(ctx context.Context, client *CachedClient, f
 	for _, ch := range chunks {
 		chunkStart := time.Now()
 
-		logs, err := client.FilterLogs(ctx, i.Filter.rangeQuery(ch.from, ch.to))
+		logs, err := i.logsRange(ctx, i.Filter, ch.from, ch.to)
 		if err != nil {
 			return fmt.Errorf("get logs: %w", err)
 		}
@@ -434,4 +470,28 @@ func chunkBlockRange(from, to, size uint64) []blockRange {
 		chunks = append(chunks, blockRange{start, end})
 	}
 	return chunks
+}
+
+func logsCacheKey(q ethereum.FilterQuery) string {
+	if q.BlockHash != nil || q.ToBlock == nil || q.FromBlock == nil {
+		panic("logs cache key requires a range query")
+	}
+
+	var b []byte
+
+	b = binary.LittleEndian.AppendUint64(b, uint64(len(q.Addresses)))
+	for _, a := range q.Addresses {
+		b = append(b, a[:]...)
+	}
+	b = binary.LittleEndian.AppendUint64(b, uint64(len(q.Topics)))
+	for _, tt := range q.Topics {
+		b = binary.LittleEndian.AppendUint64(b, uint64(len(tt)))
+		for _, t := range tt {
+			b = append(b, t[:]...)
+		}
+	}
+
+	hash := sha256.Sum256(b)
+
+	return fmt.Sprintf("logs-%d-%d-%s", q.FromBlock, q.ToBlock, hex.EncodeToString(hash[:]))
 }

@@ -45,7 +45,7 @@ Configure application-specific indexing logic directly on `Indexer`:
 * **`Filter`** specifies which logs to index.
 * **`ProcessFunc`** receives matching logs in block order.
 * **`SnapshotFunc`** and **`RestoreFunc`** serialize and deserialize application state for checkpointing.
-* **`InitFunc`** optionally initializes application state on a fresh start and receives a cached client for historical log reads.
+* **`InitFunc`** optionally initializes application state on a fresh start and receives the configured `ChainReader` plus a cached `LogsRangeFunc`.
 
 Stateful methods can be passed as callbacks without implementing an interface:
 
@@ -68,7 +68,7 @@ if err := idx.Sync(ctx); err != nil {
 }
 ```
 
-`InitFunc`, when set, is called once by `Sync` when the indexer has no finalized checkpoint to restore. It receives a `*CachedClient`, whose `FilterLogs` method caches bounded block-range queries in `DataDir`. Initialization runs before any logs are processed and before the first checkpoint is saved.
+`InitFunc`, when set, is called once by `Sync` when the indexer has no finalized checkpoint to restore. It receives the configured `ChainReader` plus a `LogsRangeFunc` that caches block-range queries in `DataDir`. Initialization runs before any logs are processed and before the first checkpoint is saved.
 
 This is useful when you want to start indexing from a very late block (for example, after a contract upgrade) but still need to reconstruct some pre-upgrade state. Instead of setting `FromBlock` to the contract's original deployment and processing years of logs, set `FromBlock` to the upgrade block and use `InitFunc` to perform heavy one-time setup (RPC calls, database migrations, etc.). Once initialization succeeds, the indexer saves a checkpoint as usual, so the setup work is not repeated on restart.
 
