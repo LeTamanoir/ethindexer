@@ -9,14 +9,10 @@ import (
 	"path/filepath"
 )
 
-func blobPath(dir, key string) string {
-	return filepath.Join(dir, key+".gz")
-}
-
 // readBlob reads and decompresses the blob stored under key. A missing key
 // returns (nil, nil).
-func readBlob(dir, key string) ([]byte, error) {
-	f, err := os.Open(blobPath(dir, key))
+func readBlob(dir, name string) ([]byte, error) {
+	f, err := os.Open(filepath.Join(dir, name))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
@@ -34,8 +30,8 @@ func readBlob(dir, key string) ([]byte, error) {
 	return io.ReadAll(gr)
 }
 
-// writeBlob compresses and atomically stores data under key.
-func writeBlob(dir, key string, data []byte) error {
+// writeBlob compresses and atomically stores data under name.
+func writeBlob(dir, name string, data []byte) error {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("create data directory %q: %w", dir, err)
 	}
@@ -60,10 +56,5 @@ func writeBlob(dir, key string, data []byte) error {
 	if err := f.Sync(); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, blobPath(dir, key))
-}
-
-// moveBlob atomically transfers a blob from srcKey to dstKey.
-func moveBlob(dir, srcKey, dstKey string) error {
-	return os.Rename(blobPath(dir, srcKey), blobPath(dir, dstKey))
+	return os.Rename(tmpName, filepath.Join(dir, name))
 }

@@ -134,7 +134,7 @@ func TestIndexer_Promote(t *testing.T) {
 
 	// Head 13 >= staged(11) + finalityDepth(2), so the staged checkpoint
 	// at head 11 should have been promoted to finalized via Move.
-	cpb, err := readBlob(dataDir, checkpointKey)
+	cpb, err := readBlob(dataDir, checkpointBlobName)
 	if err != nil {
 		t.Fatalf("load finalized: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestIndexer_Promote(t *testing.T) {
 	}
 
 	// The staged key should be gone after the move.
-	if d, err := readBlob(dataDir, checkpointStagedKey); err != nil {
+	if d, err := readBlob(dataDir, checkpointStagedBlobName); err != nil {
 		t.Fatalf("unexpected error loading staged: %v", err)
 	} else if d != nil {
 		t.Errorf("expected staged checkpoint to be moved away, got %d bytes", len(d))
@@ -252,7 +252,7 @@ func TestIndexer_Reorg(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := writeBlob(dataDir, checkpointKey, cpb); err != nil {
+	if err := writeBlob(dataDir, checkpointBlobName, cpb); err != nil {
 		t.Fatal(err)
 	}
 
@@ -302,7 +302,7 @@ func TestIndexer_Restore(t *testing.T) {
 	}
 
 	dataDir := t.TempDir()
-	if err := writeBlob(dataDir, checkpointKey, cpb); err != nil {
+	if err := writeBlob(dataDir, checkpointBlobName, cpb); err != nil {
 		t.Fatal(err)
 	}
 
@@ -382,7 +382,7 @@ func TestIndexer_InitSkippedOnRestore(t *testing.T) {
 	}
 
 	dataDir := t.TempDir()
-	if err := writeBlob(dataDir, checkpointKey, cpb); err != nil {
+	if err := writeBlob(dataDir, checkpointBlobName, cpb); err != nil {
 		t.Fatal(err)
 	}
 
