@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/ethereum/go-ethereum"
@@ -17,8 +19,8 @@ import (
 )
 
 const (
-	checkpointKey       = "checkpoint"
-	checkpointStagedKey = "checkpoint.staged"
+	checkpointBlobName       = "checkpoint.gz"
+	checkpointStagedBlobName = "checkpoint.staged.gz"
 )
 
 // Indexer indexes Ethereum logs from a finalized block onward, handling reorgs and checkpointing.
@@ -260,7 +262,7 @@ func (i *Indexer) handleReorg(ctx context.Context, h *types.Header) error {
 func (i *Indexer) restoreFinalized(ctx context.Context) (bool, error) {
 	start := time.Now()
 
-	bin, err := readBlob(i.DataDir, checkpointKey)
+	bin, err := readBlob(i.DataDir, checkpointBlobName)
 	if err != nil {
 		return false, fmt.Errorf("read checkpoint: %w", err)
 	}
@@ -319,7 +321,7 @@ func (i *Indexer) processHead(ctx context.Context, h *types.Header) error {
 func (i *Indexer) promoteCheckpoint() error {
 	start := time.Now()
 
-	if err := moveBlob(i.DataDir, checkpointStagedKey, checkpointKey); err != nil {
+	if err := os.Rename(filepath.Join(i.DataDir, checkpointStagedBlobName), filepath.Join(i.DataDir, checkpointBlobName)); err != nil {
 		return fmt.Errorf("move: %w", err)
 	}
 
@@ -347,7 +349,7 @@ func (i *Indexer) stageCheckpoint(ctx context.Context) error {
 		return fmt.Errorf("marshal: %w", err)
 	}
 
-	if err := writeBlob(i.DataDir, checkpointStagedKey, bin); err != nil {
+	if err := writeBlob(i.DataDir, checkpointStagedBlobName, bin); err != nil {
 		return fmt.Errorf("write checkpoint: %w", err)
 	}
 
@@ -389,7 +391,7 @@ func (i *Indexer) headersRange(ctx context.Context, from, to uint64) ([]*types.H
 
 func (i *Indexer) logsRange(ctx context.Context, filter Filter, from, to uint64) ([]types.Log, error) {
 	q := filter.rangeQuery(from, to)
-	key := logsCacheKey(q)
+	key := logsBlobName(q)
 
 	bin, err := readBlob(i.DataDir, key)
 	if err != nil {
@@ -472,7 +474,7 @@ func chunkBlockRange(from, to, size uint64) []blockRange {
 	return chunks
 }
 
-func logsCacheKey(q ethereum.FilterQuery) string {
+func logsBlobName(q ethereum.FilterQuery) string {
 	if q.BlockHash != nil || q.ToBlock == nil || q.FromBlock == nil {
 		panic("logs cache key requires a range query")
 	}
@@ -493,5 +495,5 @@ func logsCacheKey(q ethereum.FilterQuery) string {
 
 	hash := sha256.Sum256(b)
 
-	return fmt.Sprintf("logs-%d-%d-%s", q.FromBlock, q.ToBlock, hex.EncodeToString(hash[:]))
+	return fmt.Sprintf("logs-%d-%d-%s.gz", q.FromBlock, q.ToBlock, hex.EncodeToString(hash[:]))
 }
