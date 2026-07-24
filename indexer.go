@@ -90,6 +90,22 @@ func (i *Indexer) applyDefaults() {
 	}
 }
 
+// ClearCheckpoint removes finalized and staged checkpoints from dataDir while
+// preserving cached log ranges.
+func ClearCheckpoint(dataDir string) error {
+	if dataDir == "" {
+		return errors.New("empty data directory")
+	}
+
+	for _, name := range [...]string{checkpointBlobName, checkpointStagedBlobName} {
+		if err := os.Remove(filepath.Join(dataDir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove %s: %w", name, err)
+		}
+	}
+
+	return nil
+}
+
 // Sync restores state and catches up to the current finalized head.
 func (i *Indexer) Sync(ctx context.Context) error {
 	if i.head != nil {
