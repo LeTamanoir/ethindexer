@@ -642,7 +642,7 @@ func TestIndexer_LogsRangeCachesQueries(t *testing.T) {
 	indexer := &Indexer{Client: client, DataDir: t.TempDir()}
 
 	for range 2 {
-		logs, err := indexer.logsRange(t.Context(), Filter{}, 10, 20)
+		logs, err := indexer.logsRange(t.Context(), Filter{}, BlockRange{10, 20})
 		if err != nil {
 			t.Fatalf("logs range: %v", err)
 		}

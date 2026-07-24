@@ -497,8 +497,8 @@ func (i *Indexer) headersRange(ctx context.Context, from, to uint64) ([]*types.H
 	return heads, nil
 }
 
-func (i *Indexer) logsRange(ctx context.Context, filter Filter, from, to uint64) ([]types.Log, error) {
-	q := filter.rangeQuery(from, to)
+func (i *Indexer) logsRange(ctx context.Context, filter Filter, br BlockRange) ([]types.Log, error) {
+	q := filter.rangeQuery(br)
 	key := logsBlobName(q)
 
 	bin, err := readBlob(i.DataDir, key)
@@ -544,7 +544,7 @@ func (i *Indexer) backfillFinalized(ctx context.Context, from, to uint64) error 
 	for _, ch := range chunks {
 		chunkStart := time.Now()
 
-		logs, err := i.logsRange(ctx, i.Filter, ch.From, ch.To)
+		logs, err := i.logsRange(ctx, i.Filter, ch)
 		if err != nil {
 			return fmt.Errorf("get logs: %w", err)
 		}

@@ -28,7 +28,7 @@ type ChainReader interface {
 }
 
 // LogsRangeFunc returns matching logs for the inclusive block range [from, to].
-type LogsRangeFunc func(context.Context, Filter, uint64, uint64) ([]types.Log, error)
+type LogsRangeFunc func(context.Context, Filter, BlockRange) ([]types.Log, error)
 
 // Filter specifies which logs the indexer fetches.
 type Filter struct {
@@ -42,10 +42,10 @@ type Filter struct {
 }
 
 // rangeQuery builds a block-range FilterQuery over [from, to].
-func (f Filter) rangeQuery(from, to uint64) ethereum.FilterQuery {
+func (f Filter) rangeQuery(r BlockRange) ethereum.FilterQuery {
 	return ethereum.FilterQuery{
-		FromBlock: new(big.Int).SetUint64(from),
-		ToBlock:   new(big.Int).SetUint64(to),
+		FromBlock: new(big.Int).SetUint64(r.From),
+		ToBlock:   new(big.Int).SetUint64(r.To),
 		Addresses: f.Addresses,
 		Topics:    f.Topics,
 	}
