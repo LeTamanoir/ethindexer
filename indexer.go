@@ -427,7 +427,7 @@ func (i *Indexer) logsRange(ctx context.Context, filter Filter, from, to uint64)
 // range with FilterLogs instead of by block hash. This is more efficient but
 // does not provide reorg safety.
 func (i *Indexer) backfillFinalized(ctx context.Context, from, to uint64) error {
-	chunks := chunkBlockRange(from, to, i.MaxBlockRange)
+	chunks := ChunkBlockRange(from, to, i.MaxBlockRange)
 
 	start := time.Now()
 
@@ -436,7 +436,7 @@ func (i *Indexer) backfillFinalized(ctx context.Context, from, to uint64) error 
 	for _, ch := range chunks {
 		chunkStart := time.Now()
 
-		logs, err := i.logsRange(ctx, i.Filter, ch.from, ch.to)
+		logs, err := i.logsRange(ctx, i.Filter, ch.From, ch.To)
 		if err != nil {
 			return fmt.Errorf("get logs: %w", err)
 		}
@@ -449,7 +449,7 @@ func (i *Indexer) backfillFinalized(ctx context.Context, from, to uint64) error 
 			return fmt.Errorf("process logs: %w", err)
 		}
 
-		i.LogFunc("Backfill chunk processed", "from", ch.from, "to", ch.to, "logs", len(logs), "duration", time.Since(chunkStart))
+		i.LogFunc("Backfill chunk processed", "from", ch.From, "to", ch.To, "logs", len(logs), "duration", time.Since(chunkStart))
 	}
 
 	i.LogFunc("Backfill complete", "from", from, "to", to, "duration", time.Since(start))
@@ -457,19 +457,29 @@ func (i *Indexer) backfillFinalized(ctx context.Context, from, to uint64) error 
 	return nil
 }
 
-type blockRange struct {
-	from uint64
-	to   uint64
+// BlockRange is an inclusive block range.
+type BlockRange struct {
+	From uint64
+	To   uint64
 }
 
-func chunkBlockRange(from, to, size uint64) []blockRange {
+// ChunkBlockRange splits the inclusive block range [from, to] into ranges
+// containing at most size blocks.
+func ChunkBlockRange(from, to, size uint64) []BlockRange {
 	if size == 0 {
 		panic("invalid block range size: 0")
 	}
-	var chunks []blockRange
-	for start := from; start <= to; start += size {
-		end := min(start+size-1, to)
-		chunks = append(chunks, blockRange{start, end})
+	var chunks []BlockRange
+	for start := from; start <= to; {
+		end := to
+		if size-1 < to-start {
+			end = start + size - 1
+		}
+		chunks = append(chunks, BlockRange{From: start, To: end})
+		if end == to {
+			break
+		}
+		start = end + 1
 	}
 	return chunks
 }
