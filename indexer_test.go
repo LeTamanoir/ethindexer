@@ -546,11 +546,11 @@ func TestIndexer_InitCalledOnFreshStart(t *testing.T) {
 	if !handler.initCalled {
 		t.Error("expected Init to be called on fresh start")
 	}
-	if handler.initClient != client {
-		t.Error("expected Init to receive the configured client unchanged")
+	if handler.initIndexer != indexer {
+		t.Error("expected Init to receive the configured indexer")
 	}
-	if handler.initLogs == nil {
-		t.Error("expected Init to receive a logs range function")
+	if handler.initIndexer.Client != client {
+		t.Error("expected Init to have access to the configured client unchanged")
 	}
 }
 
@@ -631,7 +631,7 @@ func TestIndexer_InitError(t *testing.T) {
 	}
 }
 
-func TestIndexer_LogsRangeCachesQueries(t *testing.T) {
+func TestIndexer_CachedLogsRangeCachesQueries(t *testing.T) {
 	filterCalls := 0
 	client := &mockClient{
 		filterLogsFunc: func(context.Context, ethereum.FilterQuery) ([]types.Log, error) {
@@ -642,7 +642,7 @@ func TestIndexer_LogsRangeCachesQueries(t *testing.T) {
 	indexer := &Indexer{Client: client, DataDir: t.TempDir()}
 
 	for range 2 {
-		logs, err := indexer.logsRange(t.Context(), Filter{}, BlockRange{10, 20})
+		logs, err := indexer.CachedLogsRange(t.Context(), Filter{}, BlockRange{10, 20})
 		if err != nil {
 			t.Fatalf("logs range: %v", err)
 		}

@@ -38,8 +38,7 @@ type mockHandler struct {
 	restoreErr  error
 	initCalled  bool
 	initErr     error
-	initClient  ChainReader
-	initLogs    LogsRangeFunc
+	initIndexer *Indexer
 }
 
 func (m *mockHandler) Filter() Filter {
@@ -71,12 +70,11 @@ func (m *mockHandler) Process(ctx context.Context, logs []types.Log) error {
 	return nil
 }
 
-func (m *mockHandler) Init(ctx context.Context, client ChainReader, logsRange LogsRangeFunc) error {
+func (m *mockHandler) Init(ctx context.Context, indexer *Indexer) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.initCalled = true
-	m.initClient = client
-	m.initLogs = logsRange
+	m.initIndexer = indexer
 	return m.initErr
 }
 

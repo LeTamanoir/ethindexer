@@ -38,9 +38,8 @@ type Indexer struct {
 	Filter Filter
 
 	// InitFunc optionally initializes application state on a fresh start. It
-	// receives Client and a LogsRangeFunc that caches block-range queries in
-	// DataDir.
-	InitFunc func(context.Context, ChainReader, LogsRangeFunc) error
+	// receives the Indexer so it can use Client and CachedLogsRange.
+	InitFunc func(context.Context, *Indexer) error
 
 	// ProcessFunc applies matching logs in block order.
 	ProcessFunc func(context.Context, []types.Log) error
@@ -169,7 +168,7 @@ func (i *Indexer) syncTo(ctx context.Context, target *types.Header) error {
 			return fmt.Errorf("target block %d before from block %d", target.Number.Uint64(), i.FromBlock)
 		}
 		if i.InitFunc != nil {
-			if err := i.InitFunc(ctx, i.Client, i.logsRange); err != nil {
+			if err := i.InitFunc(ctx, i); err != nil {
 				return fmt.Errorf("init: %w", err)
 			}
 		}
@@ -262,9 +261,6 @@ func (i *Indexer) backfillGap(ctx context.Context, h *types.Header) error {
 	final, err := i.Client.HeaderByNumber(ctx, big.NewInt(int64(rpc.FinalizedBlockNumber)))
 	if err != nil {
 		return fmt.Errorf("finalized header: %w", err)
-	}
-	if final == nil || final.Number == nil {
-		return errors.New("nil finalized header or number")
 	}
 
 	finalizedTo := min(final.Number.Uint64(), to)
@@ -493,7 +489,9 @@ func (i *Indexer) headersRange(ctx context.Context, from, to uint64) ([]*types.H
 	return heads, nil
 }
 
-func (i *Indexer) logsRange(ctx context.Context, filter Filter, br BlockRange) ([]types.Log, error) {
+// CachedLogsRange returns logs matching filter in br and caches the result in
+// DataDir.
+func (i *Indexer) CachedLogsRange(ctx context.Context, filter Filter, br BlockRange) ([]types.Log, error) {
 	q := filter.rangeQuery(br)
 	key := logsBlobName(q)
 
@@ -540,7 +538,7 @@ func (i *Indexer) backfillFinalized(ctx context.Context, from, to uint64) error 
 	for _, ch := range chunks {
 		chunkStart := time.Now()
 
-		logs, err := i.logsRange(ctx, i.Filter, ch)
+		logs, err := i.CachedLogsRange(ctx, i.Filter, ch)
 		if err != nil {
 			return fmt.Errorf("get logs: %w", err)
 		}

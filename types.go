@@ -27,9 +27,6 @@ type ChainReader interface {
 	HeaderByNumber(context.Context, *big.Int) (*types.Header, error)
 }
 
-// LogsRangeFunc returns matching logs for the inclusive block range [from, to].
-type LogsRangeFunc func(context.Context, Filter, BlockRange) ([]types.Log, error)
-
 // Filter specifies which logs the indexer fetches.
 type Filter struct {
 	// Addresses restrict logs to the given contract addresses.
