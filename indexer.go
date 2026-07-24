@@ -90,15 +90,15 @@ func (i *Indexer) applyDefaults() {
 	}
 }
 
-// ClearCheckpoint removes finalized and staged checkpoints from dataDir while
+// ClearCheckpoint removes finalized and staged checkpoints from DataDir while
 // preserving cached log ranges.
-func ClearCheckpoint(dataDir string) error {
-	if dataDir == "" {
+func (i *Indexer) ClearCheckpoint() error {
+	if i.DataDir == "" {
 		return errors.New("empty data directory")
 	}
 
 	for _, name := range [...]string{checkpointBlobName, checkpointStagedBlobName} {
-		if err := os.Remove(filepath.Join(dataDir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := os.Remove(filepath.Join(i.DataDir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("remove %s: %w", name, err)
 		}
 	}
@@ -106,8 +106,7 @@ func ClearCheckpoint(dataDir string) error {
 	return nil
 }
 
-// Sync restores state and catches up to the current finalized head.
-func (i *Indexer) Sync(ctx context.Context) error {
+func (i *Indexer) validate() error {
 	if i.head != nil {
 		return errors.New("indexer already synced")
 	}
@@ -121,11 +120,44 @@ func (i *Indexer) Sync(ctx context.Context) error {
 		return errors.New("nil process, snapshot, or restore function")
 	}
 
+	return nil
+}
+
+// Sync restores state and catches up to the current finalized head.
+func (i *Indexer) Sync(ctx context.Context) error {
+	if err := i.validate(); err != nil {
+		return err
+	}
+
+	target, err := i.Client.HeaderByNumber(ctx, big.NewInt(int64(rpc.FinalizedBlockNumber)))
+	if err != nil {
+		return err
+	}
+
+	return i.syncTo(ctx, target)
+}
+
+// SyncTo restores state and catches up to target, which is assumed to be
+// finalized.
+func (i *Indexer) SyncTo(ctx context.Context, target *types.Header) error {
+	if err := i.validate(); err != nil {
+		return err
+	}
+
+	return i.syncTo(ctx, target)
+}
+
+func (i *Indexer) syncTo(ctx context.Context, target *types.Header) error {
+	if target == nil || target.Number == nil {
+		return errors.New("nil target header or number")
+	}
+
 	i.applyDefaults()
 
 	start := time.Now()
 
 	i.LogFunc("Syncing indexer",
+		"target", target.Number,
 		"finality_depth", i.FinalityDepth,
 		"checkpoint_interval", i.CheckpointInterval,
 		"max_block_range", i.MaxBlockRange,
@@ -137,6 +169,9 @@ func (i *Indexer) Sync(ctx context.Context) error {
 	}
 
 	if !restored {
+		if i.FromBlock > target.Number.Uint64() {
+			return fmt.Errorf("target block %d before from block %d", target.Number.Uint64(), i.FromBlock)
+		}
 		if i.InitFunc != nil {
 			if err := i.InitFunc(ctx, i.Client, i.logsRange); err != nil {
 				return fmt.Errorf("init: %w", err)
@@ -144,7 +179,7 @@ func (i *Indexer) Sync(ctx context.Context) error {
 		}
 	}
 
-	if err := i.syncFinalized(ctx); err != nil {
+	if err := i.backfillTo(ctx, target); err != nil {
 		return err
 	}
 
@@ -179,7 +214,7 @@ func (i *Indexer) Process(ctx context.Context, h *types.Header) error {
 
 	// ensure contiguous block processing.
 	if headNum != idxNum+1 {
-		return i.backfillUnfinalized(ctx, idxNum+1, headNum)
+		return i.backfillGap(ctx, h)
 	}
 
 	// ensure chain continuity.
@@ -190,22 +225,17 @@ func (i *Indexer) Process(ctx context.Context, h *types.Header) error {
 	return i.processHead(ctx, h)
 }
 
-// syncFinalized backfills from the restored head (or FromBlock on a fresh run)
-// up to the node's finalized block, then saves a finalized checkpoint.
-func (i *Indexer) syncFinalized(ctx context.Context) error {
-	final, err := i.Client.HeaderByNumber(ctx, big.NewInt(int64(rpc.FinalizedBlockNumber)))
-	if err != nil {
-		return err
-	}
-
+// backfillTo backfills from the restored head (or FromBlock on a fresh run) up
+// to target, then saves a finalized checkpoint.
+func (i *Indexer) backfillTo(ctx context.Context, target *types.Header) error {
 	from := i.FromBlock
 	if i.head != nil {
 		from = i.head.number + 1
 	}
-	to := final.Number.Uint64()
+	to := target.Number.Uint64()
 
 	if from > to {
-		i.LogFunc("No backfill required", "head", i.head.number, "finalized", to)
+		i.LogFunc("No backfill required", "head", i.head.number, "target", to)
 
 		return nil
 	}
@@ -214,13 +244,75 @@ func (i *Indexer) syncFinalized(ctx context.Context) error {
 		return fmt.Errorf("backfill: %w", err)
 	}
 
-	i.head = &blockRef{number: to, hash: final.Hash()}
+	i.head = &blockRef{number: to, hash: target.Hash()}
 
 	if err := i.stageCheckpoint(ctx); err != nil {
 		return fmt.Errorf("stage checkpoint: %w", err)
 	}
 	if err := i.promoteCheckpoint(); err != nil {
 		return fmt.Errorf("promote checkpoint: %w", err)
+	}
+
+	return nil
+}
+
+// backfillGap fills the missing blocks through h. The finalized prefix is
+// queried by block range and checkpointed; only the suffix after the finalized
+// head is queried block-by-block by hash.
+func (i *Indexer) backfillGap(ctx context.Context, h *types.Header) error {
+	from := i.head.number + 1
+	to := h.Number.Uint64()
+
+	final, err := i.Client.HeaderByNumber(ctx, big.NewInt(int64(rpc.FinalizedBlockNumber)))
+	if err != nil {
+		return fmt.Errorf("finalized header: %w", err)
+	}
+	if final == nil || final.Number == nil {
+		return errors.New("nil finalized header or number")
+	}
+
+	finalizedTo := min(final.Number.Uint64(), to)
+	if from <= finalizedTo {
+		first, err := i.Client.HeaderByNumber(ctx, new(big.Int).SetUint64(from))
+		if err != nil {
+			return fmt.Errorf("first finalized gap header: %w", err)
+		}
+		if first.ParentHash != i.head.hash {
+			return i.handleReorg(ctx, h)
+		}
+
+		finalizedHead := final
+		if finalizedTo != final.Number.Uint64() {
+			finalizedHead = first
+			if finalizedTo != from {
+				finalizedHead, err = i.Client.HeaderByNumber(ctx, new(big.Int).SetUint64(finalizedTo))
+				if err != nil {
+					return fmt.Errorf("last finalized gap header: %w", err)
+				}
+			}
+			if finalizedHead.Hash() != h.Hash() {
+				return fmt.Errorf("target header %d is not canonical", to)
+			}
+		}
+
+		if err := i.backfillFinalized(ctx, from, finalizedTo); err != nil {
+			return fmt.Errorf("backfill finalized gap: %w", err)
+		}
+
+		i.head = &blockRef{number: finalizedTo, hash: finalizedHead.Hash()}
+
+		if err := i.stageCheckpoint(ctx); err != nil {
+			return fmt.Errorf("stage checkpoint: %w", err)
+		}
+		if err := i.promoteCheckpoint(); err != nil {
+			return fmt.Errorf("promote checkpoint: %w", err)
+		}
+
+		from = finalizedTo + 1
+	}
+
+	if from <= to {
+		return i.backfillUnfinalized(ctx, from, to)
 	}
 
 	return nil

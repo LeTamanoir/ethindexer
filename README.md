@@ -19,9 +19,9 @@ See [`examples/weth`](examples/weth) for a complete example.
 
 ## How it works
 
-`Sync` restores the latest finalized checkpoint, backfills to the node's current finalized block, and saves a new finalized checkpoint.
+`Sync` restores the latest finalized checkpoint, backfills to the node's current finalized block, and saves a new finalized checkpoint. `SyncTo` does the same up to a supplied header, which the caller asserts is finalized.
 
-`Process` ingests new heads after `Sync` returns. Each header is checked against the current head. If a gap is detected, the indexer fills it. If a parent hash mismatch is detected, the indexer restores the finalized checkpoint and replays the canonical chain.
+`Process` ingests new heads after `Sync` or `SyncTo` returns. Each header is checked against the current head. If a gap is detected, the indexer fills its finalized prefix with block-range queries and uses reorg-safe block-hash queries only after the finalized head. If a parent hash mismatch is detected, the indexer restores the finalized checkpoint and replays the canonical chain.
 
 ```text
 Start block               Finalized block           Staged      Latest
