@@ -72,9 +72,6 @@ be a pointer so checkpoints can restore it in place. Its persisted fields must
 be gob-compatible; state with custom serialization requirements can implement
 `gob.GobEncoder` and `gob.GobDecoder`.
 
-This changes the on-disk encoding. Use a fresh `DataDir` when upgrading from the
-callback-based API; its checkpoints and cached log blobs are not compatible.
-
 Applications that need custom initialization can use `HasCheckpoint` before
 calling `Sync`:
 
