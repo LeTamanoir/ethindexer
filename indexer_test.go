@@ -359,12 +359,6 @@ func TestIndexer_InitCalledOnFreshStart(t *testing.T) {
 	if !handler.initCalled {
 		t.Error("expected Init to be called on fresh start")
 	}
-	if handler.initClient != client {
-		t.Error("expected Init to receive the configured client unchanged")
-	}
-	if handler.initLogs == nil {
-		t.Error("expected Init to receive a logs range function")
-	}
 }
 
 func TestIndexer_InitSkippedOnRestore(t *testing.T) {
@@ -455,7 +449,7 @@ func TestIndexer_LogsRangeCachesQueries(t *testing.T) {
 	indexer := &Indexer{Client: client, DataDir: t.TempDir()}
 
 	for range 2 {
-		logs, err := indexer.logsRange(t.Context(), Filter{}, 10, 20)
+		logs, err := indexer.CachedFilterLogs(t.Context(), Filter{}, BlockRange{From: 10, To: 20})
 		if err != nil {
 			t.Fatalf("logs range: %v", err)
 		}

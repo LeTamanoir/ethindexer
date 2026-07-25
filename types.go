@@ -41,11 +41,11 @@ type Filter struct {
 	Topics [][]common.Hash
 }
 
-// rangeQuery builds a block-range FilterQuery over [from, to].
-func (f Filter) rangeQuery(from, to uint64) ethereum.FilterQuery {
+// rangeQuery builds a block-range FilterQuery over r.
+func (f Filter) rangeQuery(r BlockRange) ethereum.FilterQuery {
 	return ethereum.FilterQuery{
-		FromBlock: new(big.Int).SetUint64(from),
-		ToBlock:   new(big.Int).SetUint64(to),
+		FromBlock: new(big.Int).SetUint64(r.From),
+		ToBlock:   new(big.Int).SetUint64(r.To),
 		Addresses: f.Addresses,
 		Topics:    f.Topics,
 	}
