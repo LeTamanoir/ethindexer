@@ -1,9 +1,7 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/gob"
 	"encoding/hex"
 	"fmt"
 	"log/slog"
@@ -34,25 +32,6 @@ var (
 type WETH struct {
 	Balances   map[common.Address]uint256.Int
 	Allowances map[common.Address]map[common.Address]uint256.Int
-}
-
-func NewWETH() *WETH {
-	return &WETH{
-		Balances:   make(map[common.Address]uint256.Int),
-		Allowances: make(map[common.Address]map[common.Address]uint256.Int),
-	}
-}
-
-func (e *WETH) Restore(_ context.Context, data []byte) error {
-	return gob.NewDecoder(bytes.NewReader(data)).Decode(e)
-}
-
-func (e *WETH) Snapshot(_ context.Context) ([]byte, error) {
-	var b bytes.Buffer
-	if err := gob.NewEncoder(&b).Encode(e); err != nil {
-		return nil, err
-	}
-	return b.Bytes(), nil
 }
 
 func (e *WETH) Process(_ context.Context, logs []types.Log) error {
@@ -140,9 +119,7 @@ func run() error {
 		return err
 	}
 
-	handler := NewWETH()
-
-	idx := &ethindexer.Indexer{
+	idx := &ethindexer.Indexer[*WETH]{
 		Client:    httpC,
 		DataDir:   ".weth_indexer",
 		FromBlock: 4719568,
@@ -150,10 +127,11 @@ func run() error {
 			Addresses: []common.Address{common.HexToAddress("0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2")},
 			Topics:    [][]common.Hash{{transferEventID, approvalEventID}},
 		},
-		ProcessFunc:  handler.Process,
-		SnapshotFunc: handler.Snapshot,
-		RestoreFunc:  handler.Restore,
-		LogFunc:      slog.Info,
+		LogFunc: slog.Info,
+		State: &WETH{
+			Balances:   make(map[common.Address]uint256.Int),
+			Allowances: make(map[common.Address]map[common.Address]uint256.Int),
+		},
 	}
 	if err := idx.Sync(ctx); err != nil {
 		return fmt.Errorf("sync indexer: %w", err)

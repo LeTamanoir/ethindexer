@@ -9,16 +9,16 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 )
 
-// checkpoint stores handler state at a specific chain head.
-type checkpoint struct {
-	head  blockRef
-	state []byte
+// checkpoint stores application state at a specific chain head.
+type checkpoint[S any] struct {
+	Head  blockRef
+	State S
 }
 
 // blockRef is a (number, hash) pair identifying a block.
 type blockRef struct {
-	number uint64
-	hash   common.Hash
+	Number uint64
+	Hash   common.Hash
 }
 
 // ChainReader provides access to Ethereum logs and block headers.
@@ -26,9 +26,6 @@ type ChainReader interface {
 	FilterLogs(context.Context, ethereum.FilterQuery) ([]types.Log, error)
 	HeaderByNumber(context.Context, *big.Int) (*types.Header, error)
 }
-
-// LogsRangeFunc returns matching logs for the inclusive block range [from, to].
-type LogsRangeFunc func(context.Context, Filter, uint64, uint64) ([]types.Log, error)
 
 // Filter specifies which logs the indexer fetches.
 type Filter struct {
