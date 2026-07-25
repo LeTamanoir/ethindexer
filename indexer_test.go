@@ -161,6 +161,74 @@ func TestIndexer_Promote(t *testing.T) {
 	}
 }
 
+func TestIndexer_HasCheckpoint(t *testing.T) {
+	dataDir := t.TempDir()
+	indexer := &Indexer{DataDir: dataDir}
+
+	has, err := indexer.HasCheckpoint()
+	if err != nil {
+		t.Fatalf("has checkpoint: %v", err)
+	}
+	if has {
+		t.Fatal("expected no checkpoint")
+	}
+
+	if err := writeBlob(dataDir, checkpointStagedBlobName, []byte("staged")); err != nil {
+		t.Fatal(err)
+	}
+	has, err = indexer.HasCheckpoint()
+	if err != nil {
+		t.Fatalf("has checkpoint: %v", err)
+	}
+	if has {
+		t.Fatal("expected staged checkpoint not to count as finalized")
+	}
+
+	if err := writeBlob(dataDir, checkpointBlobName, []byte("finalized")); err != nil {
+		t.Fatal(err)
+	}
+	has, err = indexer.HasCheckpoint()
+	if err != nil {
+		t.Fatalf("has checkpoint: %v", err)
+	}
+	if !has {
+		t.Fatal("expected checkpoint")
+	}
+}
+
+func TestIndexer_ClearCheckpoint(t *testing.T) {
+	dataDir := t.TempDir()
+	indexer := &Indexer{DataDir: dataDir}
+
+	for _, name := range []string{checkpointBlobName, checkpointStagedBlobName, "cached-logs.gz"} {
+		if err := writeBlob(dataDir, name, []byte(name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := indexer.ClearCheckpoint(); err != nil {
+		t.Fatalf("clear checkpoint: %v", err)
+	}
+
+	for _, name := range []string{checkpointBlobName, checkpointStagedBlobName} {
+		bin, err := readBlob(dataDir, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bin != nil {
+			t.Errorf("expected %s to be removed", name)
+		}
+	}
+
+	bin, err := readBlob(dataDir, "cached-logs.gz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(bin) != "cached-logs.gz" {
+		t.Fatal("expected cached log ranges to be preserved")
+	}
+}
+
 // TestIndexer_PromoteGuardNoStaged verifies that the promote check does
 // not fire when idx.staged is zero, even if head.Number >= finalityDepth.
 func TestIndexer_PromoteGuardNoStaged(t *testing.T) {
