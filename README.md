@@ -53,7 +53,7 @@ state := &WETH{
     Allowances: make(map[common.Address]map[common.Address]uint256.Int),
 }
 
-idx := &ethindexer.Indexer{
+idx := &ethindexer.Indexer[*WETH]{
     Client:    client,
     DataDir:   ".ethindexer",
     FromBlock: deploymentBlock,

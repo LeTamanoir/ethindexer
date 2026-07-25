@@ -119,7 +119,7 @@ func run() error {
 		return err
 	}
 
-	idx := &ethindexer.Indexer{
+	idx := &ethindexer.Indexer[*WETH]{
 		Client:    httpC,
 		DataDir:   ".weth_indexer",
 		FromBlock: 4719568,

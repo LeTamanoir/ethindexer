@@ -74,8 +74,8 @@ func (m *mockHandler) Process(_ context.Context, logs []types.Log) error {
 	return nil
 }
 
-func indexerForHandler(client ChainReader, handler *mockHandler, dataDir string, fromBlock uint64) *Indexer {
-	return &Indexer{
+func indexerForHandler(client ChainReader, handler *mockHandler, dataDir string, fromBlock uint64) *Indexer[*mockHandler] {
+	return &Indexer[*mockHandler]{
 		Client:    client,
 		DataDir:   dataDir,
 		FromBlock: fromBlock,

@@ -133,7 +133,7 @@ func TestIndexer_Promote(t *testing.T) {
 
 	// Head 13 >= staged(11) + finalityDepth(2), so the staged checkpoint
 	// at head 11 should have been promoted to finalized via Move.
-	cp := checkpoint{State: &mockHandler{}}
+	cp := checkpoint[*mockHandler]{State: &mockHandler{}}
 	found, err := readBlob(dataDir, checkpointBlobName, &cp)
 	if err != nil {
 		t.Fatalf("load finalized: %v", err)
@@ -146,7 +146,7 @@ func TestIndexer_Promote(t *testing.T) {
 	}
 
 	// The staged key should be gone after the move.
-	staged := checkpoint{State: &mockHandler{}}
+	staged := checkpoint[*mockHandler]{State: &mockHandler{}}
 	if found, err := readBlob(dataDir, checkpointStagedBlobName, &staged); err != nil {
 		t.Fatalf("unexpected error loading staged: %v", err)
 	} else if found {
@@ -160,7 +160,7 @@ func TestIndexer_Promote(t *testing.T) {
 
 func TestIndexer_HasCheckpoint(t *testing.T) {
 	dataDir := t.TempDir()
-	indexer := &Indexer{DataDir: dataDir}
+	indexer := &Indexer[*mockHandler]{DataDir: dataDir}
 
 	has, err := indexer.HasCheckpoint()
 	if err != nil {
@@ -195,7 +195,7 @@ func TestIndexer_HasCheckpoint(t *testing.T) {
 
 func TestIndexer_ClearCheckpoint(t *testing.T) {
 	dataDir := t.TempDir()
-	indexer := &Indexer{DataDir: dataDir}
+	indexer := &Indexer[*mockHandler]{DataDir: dataDir}
 
 	for _, name := range []string{checkpointBlobName, checkpointStagedBlobName, "cached-logs.gz"} {
 		if err := writeBlob(dataDir, name, []byte(name)); err != nil {
@@ -349,7 +349,7 @@ func TestIndexer_Restore(t *testing.T) {
 	finalizedBlockNum := uint64(50)
 	finalized := &types.Header{Number: new(big.Int).SetUint64(finalizedBlockNum)}
 
-	cp := checkpoint{
+	cp := checkpoint[*plainState]{
 		Head:  blockRef{Number: finalizedBlockNum, Hash: finalized.Hash()},
 		State: &plainState{Value: 42},
 	}
@@ -369,7 +369,7 @@ func TestIndexer_Restore(t *testing.T) {
 	}
 
 	state := &plainState{}
-	indexer := &Indexer{
+	indexer := &Indexer[*plainState]{
 		Client:    client,
 		DataDir:   dataDir,
 		FromBlock: 10,
@@ -399,7 +399,7 @@ func TestIndexer_LogsRangeCachesQueries(t *testing.T) {
 			return []types.Log{{BlockNumber: 12}}, nil
 		},
 	}
-	indexer := &Indexer{
+	indexer := &Indexer[*mockHandler]{
 		Client:  client,
 		DataDir: t.TempDir(),
 		State:   &mockHandler{},
@@ -428,7 +428,7 @@ func TestIndexer_LogsRangeCachesEmptyQueries(t *testing.T) {
 			return nil, nil
 		},
 	}
-	indexer := &Indexer{
+	indexer := &Indexer[*mockHandler]{
 		Client:  client,
 		DataDir: t.TempDir(),
 		State:   &mockHandler{},

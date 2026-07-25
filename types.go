@@ -1,9 +1,7 @@
 package ethindexer
 
 import (
-	"bytes"
 	"context"
-	"encoding/gob"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum"
@@ -12,29 +10,9 @@ import (
 )
 
 // checkpoint stores application state at a specific chain head.
-type checkpoint struct {
+type checkpoint[S any] struct {
 	Head  blockRef
-	State any
-}
-
-func (c checkpoint) GobEncode() ([]byte, error) {
-	var b bytes.Buffer
-	enc := gob.NewEncoder(&b)
-	if err := enc.Encode(c.Head); err != nil {
-		return nil, err
-	}
-	if err := enc.Encode(c.State); err != nil {
-		return nil, err
-	}
-	return b.Bytes(), nil
-}
-
-func (c *checkpoint) GobDecode(data []byte) error {
-	dec := gob.NewDecoder(bytes.NewReader(data))
-	if err := dec.Decode(&c.Head); err != nil {
-		return err
-	}
-	return dec.Decode(c.State)
+	State S
 }
 
 // blockRef is a (number, hash) pair identifying a block.
