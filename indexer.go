@@ -88,15 +88,31 @@ func (i *Indexer) applyDefaults() {
 	}
 }
 
-// ClearCheckpoint removes finalized and staged checkpoints from dataDir while
+// HasCheckpoint reports whether a finalized checkpoint exists in DataDir.
+func (i *Indexer) HasCheckpoint() (bool, error) {
+	if i.DataDir == "" {
+		return false, errors.New("empty data directory")
+	}
+
+	_, err := os.Stat(filepath.Join(i.DataDir, checkpointBlobName))
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	return false, fmt.Errorf("stat %s: %w", checkpointBlobName, err)
+}
+
+// ClearCheckpoint removes finalized and staged checkpoints from DataDir while
 // preserving cached log ranges.
-func ClearCheckpoint(dataDir string) error {
-	if dataDir == "" {
+func (i *Indexer) ClearCheckpoint() error {
+	if i.DataDir == "" {
 		return errors.New("empty data directory")
 	}
 
 	for _, name := range [...]string{checkpointBlobName, checkpointStagedBlobName} {
-		if err := os.Remove(filepath.Join(dataDir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := os.Remove(filepath.Join(i.DataDir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("remove %s: %w", name, err)
 		}
 	}
