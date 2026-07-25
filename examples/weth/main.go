@@ -133,8 +133,8 @@ func run() error {
 			Allowances: make(map[common.Address]map[common.Address]uint256.Int),
 		},
 	}
-	if err := idx.Sync(ctx); err != nil {
-		return fmt.Errorf("sync indexer: %w", err)
+	if err := idx.Process(ctx, nil); err != nil {
+		return fmt.Errorf("process latest head: %w", err)
 	}
 
 	heads := make(chan *types.Header, 128)

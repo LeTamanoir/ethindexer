@@ -21,9 +21,14 @@ See [`examples/weth`](examples/weth) for a complete example.
 
 ## How it works
 
-`Sync` restores the latest finalized checkpoint, backfills to the node's current finalized block, and saves a new finalized checkpoint.
+The first call to `Process` restores the latest finalized checkpoint when one
+exists, then backfills through the supplied target. Pass a nil target to use
+the node's latest head.
 
-`Process` ingests new heads after `Sync` returns. Each header is checked against the current head. If a gap is detected, the indexer fills it. If a parent hash mismatch is detected, the indexer restores the finalized checkpoint and replays the canonical chain.
+Each subsequent target is checked against the indexed head. Gaps use block-range
+queries through the finalized head and reorg-safe block-hash queries afterward.
+On a parent hash mismatch, the indexer restores the finalized checkpoint and
+replays the canonical chain.
 
 ```text
 Start block               Finalized block           Staged      Latest
@@ -62,7 +67,7 @@ idx := &ethindexer.Indexer[*WETH]{
     },
     State: state,
 }
-if err := idx.Sync(ctx); err != nil {
+if err := idx.Process(ctx, nil); err != nil {
     return err
 }
 ```
@@ -73,7 +78,7 @@ be gob-compatible; state with custom serialization requirements can implement
 `gob.GobEncoder` and `gob.GobDecoder`.
 
 Applications that need custom initialization can use `HasCheckpoint` before
-calling `Sync`:
+calling `Process`:
 
 ```go
 hasCheckpoint, err := idx.HasCheckpoint()

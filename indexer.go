@@ -68,7 +68,7 @@ type Indexer[S State] struct {
 	lastStagedNum uint64 // block number of the most recent staged checkpoint
 }
 
-func (i *Indexer[S]) applyDefaults() {
+func (i *Indexer[S]) defaults() {
 	if i.LogFunc == nil {
 		i.LogFunc = func(string, ...any) {}
 	}
@@ -118,11 +118,9 @@ func (i *Indexer[S]) ClearCheckpoint() error {
 	return nil
 }
 
-// Sync restores state and catches up to the current finalized head.
-func (i *Indexer[S]) Sync(ctx context.Context) error {
-	if i.head != nil {
-		return errors.New("indexer already synced")
-	}
+func (i *Indexer[S]) init() error {
+	i.defaults()
+
 	if i.Client == nil {
 		return errors.New("nil client")
 	}
@@ -130,33 +128,97 @@ func (i *Indexer[S]) Sync(ctx context.Context) error {
 		return errors.New("empty data directory")
 	}
 
-	i.applyDefaults()
-
-	start := time.Now()
-
-	i.LogFunc("Syncing indexer",
+	i.LogFunc("Initializing indexer",
 		"finality_depth", i.FinalityDepth,
 		"checkpoint_interval", i.CheckpointInterval,
 		"max_block_range", i.MaxBlockRange,
 		"max_concurrent", i.MaxConcurrency)
 
-	if _, err := i.restoreFinalized(); err != nil {
-		return err
-	}
-
-	if err := i.syncFinalized(ctx); err != nil {
-		return err
-	}
-
-	i.LogFunc("Indexer synced", "head", i.head.Number, "duration", time.Since(start))
-
-	return nil
+	_, err := i.restore()
+	return err
 }
 
-// Process ingests a new head and handles gaps and reorgs.
+// backfillGap fills the missing blocks through h. The finalized prefix is
+// queried by block range and checkpointed; only the suffix after the finalized
+// head is queried block-by-block by hash.
+func (i *Indexer[S]) backfillGap(ctx context.Context, h *types.Header) error {
+	from := i.FromBlock
+	if i.head != nil {
+		from = i.head.Number + 1
+	}
+	to := h.Number.Uint64()
+	if from > to {
+		return fmt.Errorf("target block %d before next block %d", to, from)
+	}
+
+	final, err := i.Client.HeaderByNumber(ctx, big.NewInt(int64(rpc.FinalizedBlockNumber)))
+	if err != nil {
+		return fmt.Errorf("finalized header: %w", err)
+	}
+	finalizedNumber := final.Number.Uint64()
+
+	// A finalized range query skips the intermediate headers, so verify that
+	// it continues from the current head before processing any logs.
+	if i.head != nil && from <= finalizedNumber {
+		first, err := i.Client.HeaderByNumber(ctx, new(big.Int).SetUint64(from))
+		if err != nil {
+			return fmt.Errorf("first finalized gap header: %w", err)
+		}
+		if first.ParentHash != i.head.Hash {
+			return i.reorg(ctx, h)
+		}
+	}
+
+	switch {
+	// The entire gap is newer than the finalized head.
+	case finalizedNumber < from:
+		if i.head == nil {
+			return fmt.Errorf("from block %d is newer than finalized block %d", from, finalizedNumber)
+		}
+		return i.backfillUnsafe(ctx, from, to)
+
+	// The entire gap is finalized.
+	case to <= finalizedNumber:
+		canonical := final
+		if to < finalizedNumber {
+			canonical, err = i.Client.HeaderByNumber(ctx, new(big.Int).SetUint64(to))
+			if err != nil {
+				return fmt.Errorf("target header: %w", err)
+			}
+		}
+		if canonical.Hash() != h.Hash() {
+			return fmt.Errorf("target header %d is not canonical", to)
+		}
+		return i.backfillFinalized(ctx, from, canonical)
+
+	// The gap crosses the finalized head.
+	default:
+		if err := i.backfillFinalized(ctx, from, final); err != nil {
+			return err
+		}
+		return i.backfillUnsafe(ctx, finalizedNumber+1, to)
+	}
+}
+
+// Process ingests a target head, restoring State on its first call. A nil head
+// selects the node's latest head.
 func (i *Indexer[S]) Process(ctx context.Context, h *types.Header) error {
 	if i.head == nil {
-		return errors.New("indexer not synced")
+		if err := i.init(); err != nil {
+			return err
+		}
+	}
+
+	if h == nil {
+		var err error
+		h, err = i.Client.HeaderByNumber(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("latest header: %w", err)
+		}
+	}
+
+	if i.head == nil {
+		return i.backfillGap(ctx, h)
 	}
 
 	idxNum := i.head.Number
@@ -174,66 +236,30 @@ func (i *Indexer[S]) Process(ctx context.Context, h *types.Header) error {
 			return nil
 		}
 
-		return i.handleReorg(ctx, h)
+		return i.reorg(ctx, h)
 	}
 
 	// ensure contiguous block processing.
 	if headNum != idxNum+1 {
-		return i.backfillUnfinalized(ctx, idxNum+1, headNum)
+		return i.backfillGap(ctx, h)
 	}
 
 	// ensure chain continuity.
 	if i.head.Hash != h.ParentHash {
-		return i.handleReorg(ctx, h)
+		return i.reorg(ctx, h)
 	}
 
-	return i.processHead(ctx, h)
+	return i.process(ctx, h)
 }
 
-// syncFinalized backfills from the restored head (or FromBlock on a fresh run)
-// up to the node's finalized block, then saves a finalized checkpoint.
-func (i *Indexer[S]) syncFinalized(ctx context.Context) error {
-	final, err := i.Client.HeaderByNumber(ctx, big.NewInt(int64(rpc.FinalizedBlockNumber)))
-	if err != nil {
-		return err
-	}
-
-	from := i.FromBlock
-	if i.head != nil {
-		from = i.head.Number + 1
-	}
-	to := final.Number.Uint64()
-
-	if from > to {
-		i.LogFunc("No backfill required", "head", i.head.Number, "finalized", to)
-
-		return nil
-	}
-
-	if err := i.backfillFinalized(ctx, from, to); err != nil {
-		return fmt.Errorf("backfill: %w", err)
-	}
-
-	i.head = &blockRef{Number: to, Hash: final.Hash()}
-
-	if err := i.stageCheckpoint(); err != nil {
-		return fmt.Errorf("stage checkpoint: %w", err)
-	}
-	if err := i.promoteCheckpoint(); err != nil {
-		return fmt.Errorf("promote checkpoint: %w", err)
-	}
-
-	return nil
-}
-
-// backfillUnfinalized fetches and processes the missing headers in [from, to].
+// backfillUnsafe fetches and processes the missing headers in [from, to].
 //
-// The range is assumed to be unfinalized, so each header is fetched
+// The range is assumed to be after the finalized head, so each header is fetched
 // individually and logs are queried by block hash to preserve reorg safety.
-func (i *Indexer[S]) backfillUnfinalized(ctx context.Context, from, to uint64) error {
+func (i *Indexer[S]) backfillUnsafe(ctx context.Context, from, to uint64) error {
 	start := time.Now()
 
-	heads, err := i.headersRange(ctx, from, to)
+	heads, err := i.headers(ctx, from, to)
 	if err != nil {
 		return fmt.Errorf("headers range: %w", err)
 	}
@@ -246,13 +272,13 @@ func (i *Indexer[S]) backfillUnfinalized(ctx context.Context, from, to uint64) e
 		}
 	}
 
-	i.LogFunc("Backfill unfinalized complete", "from", from, "to", to, "duration", time.Since(start))
+	i.LogFunc("Backfill unsafe complete", "from", from, "to", to, "duration", time.Since(start))
 
 	return nil
 }
 
-// handleReorg restores the finalized checkpoint and reprocesses the divergent head.
-func (i *Indexer[S]) handleReorg(ctx context.Context, h *types.Header) error {
+// reorg restores the finalized checkpoint and reprocesses the divergent head.
+func (i *Indexer[S]) reorg(ctx context.Context, h *types.Header) error {
 	if i.head.Number == h.Number.Uint64() {
 		i.LogFunc("Reorg detected at current head", "head", i.head.Number, "current_hash", i.head.Hash, "received_hash", h.Hash())
 	} else {
@@ -263,7 +289,7 @@ func (i *Indexer[S]) handleReorg(ctx context.Context, h *types.Header) error {
 	i.staged = nil
 	i.lastStagedNum = 0
 
-	ok, err := i.restoreFinalized()
+	ok, err := i.restore()
 	if err != nil {
 		return fmt.Errorf("restore finalized: %w", err)
 	}
@@ -274,8 +300,8 @@ func (i *Indexer[S]) handleReorg(ctx context.Context, h *types.Header) error {
 	return i.Process(ctx, h)
 }
 
-// restoreFinalized restores State from a checkpoint and records the head.
-func (i *Indexer[S]) restoreFinalized() (bool, error) {
+// restore restores State from the finalized checkpoint and records its head.
+func (i *Indexer[S]) restore() (bool, error) {
 	start := time.Now()
 
 	cp := checkpoint[S]{State: i.State}
@@ -296,8 +322,8 @@ func (i *Indexer[S]) restoreFinalized() (bool, error) {
 	return true, nil
 }
 
-// processHead handles a new header and assumes it is strictly consecutive to i.head.
-func (i *Indexer[S]) processHead(ctx context.Context, h *types.Header) error {
+// process handles a new header that is strictly consecutive to i.head.
+func (i *Indexer[S]) process(ctx context.Context, h *types.Header) error {
 	logs, err := i.Client.FilterLogs(ctx, i.Filter.blockQuery(h.Hash()))
 	if err != nil {
 		return fmt.Errorf("filter logs: %w", err)
@@ -312,21 +338,21 @@ func (i *Indexer[S]) processHead(ctx context.Context, h *types.Header) error {
 	// save a checkpoint if none is staged and enough blocks have passed
 	if i.staged == nil {
 		if i.head.Number >= i.lastStagedNum+i.CheckpointInterval {
-			return i.stageCheckpoint()
+			return i.stage()
 		}
 		return nil
 	}
 
 	// promote staged to finalized once the head has aged past finalityDepth.
 	if i.head.Number >= i.staged.Number+i.FinalityDepth {
-		return i.promoteCheckpoint()
+		return i.promote()
 	}
 
 	return nil
 }
 
-// promoteCheckpoint moves the staged checkpoint to finalized.
-func (i *Indexer[S]) promoteCheckpoint() error {
+// promote moves the staged checkpoint to finalized.
+func (i *Indexer[S]) promote() error {
 	start := time.Now()
 
 	if err := os.Rename(filepath.Join(i.DataDir, checkpointStagedBlobName), filepath.Join(i.DataDir, checkpointBlobName)); err != nil {
@@ -340,8 +366,8 @@ func (i *Indexer[S]) promoteCheckpoint() error {
 	return nil
 }
 
-// stageCheckpoint saves State and the current head as a staged checkpoint.
-func (i *Indexer[S]) stageCheckpoint() error {
+// stage saves State and the current head as a staged checkpoint.
+func (i *Indexer[S]) stage() error {
 	start := time.Now()
 
 	cp := checkpoint[S]{Head: *i.head, State: i.State}
@@ -357,8 +383,8 @@ func (i *Indexer[S]) stageCheckpoint() error {
 	return nil
 }
 
-// headersRange fetches headers [from, to] concurrently, preserving order.
-func (i *Indexer[S]) headersRange(ctx context.Context, from, to uint64) ([]*types.Header, error) {
+// headers fetches [from, to] concurrently, preserving order.
+func (i *Indexer[S]) headers(ctx context.Context, from, to uint64) ([]*types.Header, error) {
 	if from > to {
 		panic("invalid range: from > to")
 	}
@@ -389,7 +415,7 @@ func (i *Indexer[S]) headersRange(ctx context.Context, from, to uint64) ([]*type
 // using the cache in DataDir when available.
 func (i *Indexer[S]) CachedFilterLogs(ctx context.Context, f Filter, r BlockRange) ([]types.Log, error) {
 	q := f.rangeQuery(r)
-	key := logsBlobName(q)
+	key := logsKey(q)
 
 	var logs []types.Log
 	ok, err := readBlob(i.DataDir, key, &logs)
@@ -412,17 +438,19 @@ func (i *Indexer[S]) CachedFilterLogs(ctx context.Context, f Filter, r BlockRang
 	return logs, nil
 }
 
-// backfillFinalized fetches and processes logs over [from, to] in chunks.
+// backfillFinalized fetches and processes logs over [from, to.Number] in
+// chunks, then records to as the finalized checkpoint.
 //
 // The range is assumed to be finalized, allowing logs to be queried by block
 // range with FilterLogs instead of by block hash. This is more efficient but
 // does not provide reorg safety.
-func (i *Indexer[S]) backfillFinalized(ctx context.Context, from, to uint64) error {
-	chunks := ChunkBlockRange(from, to, i.MaxBlockRange)
+func (i *Indexer[S]) backfillFinalized(ctx context.Context, from uint64, to *types.Header) error {
+	toNumber := to.Number.Uint64()
+	chunks := ChunkBlockRange(from, toNumber, i.MaxBlockRange)
 
 	start := time.Now()
 
-	i.LogFunc("Starting backfill", "from", from, "to", to, "chunks", len(chunks))
+	i.LogFunc("Starting backfill", "from", from, "to", toNumber, "chunks", len(chunks))
 
 	for _, ch := range chunks {
 		chunkStart := time.Now()
@@ -443,7 +471,16 @@ func (i *Indexer[S]) backfillFinalized(ctx context.Context, from, to uint64) err
 		i.LogFunc("Backfill chunk processed", "from", ch.From, "to", ch.To, "logs", len(logs), "duration", time.Since(chunkStart))
 	}
 
-	i.LogFunc("Backfill complete", "from", from, "to", to, "duration", time.Since(start))
+	i.LogFunc("Backfill complete", "from", from, "to", toNumber, "duration", time.Since(start))
+
+	i.head = &blockRef{Number: toNumber, Hash: to.Hash()}
+
+	if err := i.stage(); err != nil {
+		return fmt.Errorf("stage checkpoint: %w", err)
+	}
+	if err := i.promote(); err != nil {
+		return fmt.Errorf("promote checkpoint: %w", err)
+	}
 
 	return nil
 }
@@ -475,7 +512,7 @@ func ChunkBlockRange(from, to, size uint64) []BlockRange {
 	return chunks
 }
 
-func logsBlobName(q ethereum.FilterQuery) string {
+func logsKey(q ethereum.FilterQuery) string {
 	if q.BlockHash != nil || q.ToBlock == nil || q.FromBlock == nil {
 		panic("logs cache key requires a range query")
 	}
