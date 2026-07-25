@@ -16,13 +16,12 @@ func TestIndexer_Backfill(t *testing.T) {
 	ctx := t.Context()
 
 	finalizedBlockNum := uint64(100)
+	finalized := &types.Header{Number: new(big.Int).SetUint64(finalizedBlockNum)}
 
 	client := &mockClient{
 		headerByNumberFunc: func(ctx context.Context, number *big.Int) (*types.Header, error) {
 			if number.Int64() == int64(rpc.FinalizedBlockNumber) {
-				return &types.Header{
-					Number: big.NewInt(int64(finalizedBlockNum)),
-				}, nil
+				return finalized, nil
 			}
 			return nil, nil
 		},
@@ -39,12 +38,12 @@ func TestIndexer_Backfill(t *testing.T) {
 	handler := &mockHandler{}
 
 	indexer := indexerForHandler(client, handler, t.TempDir(), 50)
-	if err := indexer.Sync(ctx); err != nil {
+	if err := indexer.Process(ctx, finalized); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if indexer.head.number != finalizedBlockNum {
-		t.Errorf("expected head number %d, got %d", finalizedBlockNum, indexer.head.number)
+	if indexer.head.Number != finalizedBlockNum {
+		t.Errorf("expected head number %d, got %d", finalizedBlockNum, indexer.head.Number)
 	}
 
 	if len(handler.processed) != int(finalizedBlockNum-50+1) {
@@ -52,16 +51,59 @@ func TestIndexer_Backfill(t *testing.T) {
 	}
 }
 
+func TestIndexer_ProcessLatestOnNilHead(t *testing.T) {
+	ctx := t.Context()
+	target := &types.Header{
+		Number:     big.NewInt(100),
+		ParentHash: common.HexToHash("0x1234"),
+	}
+
+	headerCalls := 0
+	client := &mockClient{
+		headerByNumberFunc: func(_ context.Context, number *big.Int) (*types.Header, error) {
+			headerCalls++
+			if number == nil || number.Int64() == int64(rpc.FinalizedBlockNumber) {
+				return target, nil
+			}
+			return nil, errors.New("unexpected header query")
+		},
+		filterLogsFunc: func(_ context.Context, q ethereum.FilterQuery) ([]types.Log, error) {
+			if q.BlockHash != nil {
+				t.Fatal("expected a block-range query")
+			}
+			if q.FromBlock.Uint64() != 50 || q.ToBlock.Uint64() != 100 {
+				t.Fatalf("unexpected range [%d, %d]", q.FromBlock.Uint64(), q.ToBlock.Uint64())
+			}
+			return []types.Log{{BlockNumber: 100}}, nil
+		},
+	}
+
+	handler := &mockHandler{}
+	indexer := indexerForHandler(client, handler, t.TempDir(), 50)
+	if err := indexer.Process(ctx, nil); err != nil {
+		t.Fatalf("process latest: %v", err)
+	}
+
+	if headerCalls != 2 {
+		t.Fatalf("expected latest and finalized header queries, got %d", headerCalls)
+	}
+	if indexer.head.Number != 100 || indexer.head.Hash != target.Hash() {
+		t.Fatalf("unexpected head: %+v", indexer.head)
+	}
+	if len(handler.processed) != 1 || handler.processed[0].BlockNumber != 100 {
+		t.Fatalf("unexpected processed logs: %+v", handler.processed)
+	}
+}
+
 func TestIndexer_Live(t *testing.T) {
 	ctx := t.Context()
 
 	finalizedBlockNum := uint64(10)
+	finalized := &types.Header{Number: new(big.Int).SetUint64(finalizedBlockNum)}
 
 	client := &mockClient{
 		headerByNumberFunc: func(ctx context.Context, number *big.Int) (*types.Header, error) {
-			return &types.Header{
-				Number: big.NewInt(int64(finalizedBlockNum)),
-			}, nil
+			return finalized, nil
 		},
 		filterLogsFunc: func(ctx context.Context, q ethereum.FilterQuery) ([]types.Log, error) {
 			var num uint64
@@ -75,12 +117,12 @@ func TestIndexer_Live(t *testing.T) {
 	handler := &mockHandler{}
 
 	indexer := indexerForHandler(client, handler, t.TempDir(), 10)
-	if err := indexer.Sync(ctx); err != nil {
+	if err := indexer.Process(ctx, finalized); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	// Simulate the user feeding live new heads to the indexer.
-	h11 := &types.Header{Number: big.NewInt(11), ParentHash: indexer.head.hash}
+	h11 := &types.Header{Number: big.NewInt(11), ParentHash: indexer.head.Hash}
 	h12 := &types.Header{Number: big.NewInt(12), ParentHash: h11.Hash()}
 	h13 := &types.Header{Number: big.NewInt(13), ParentHash: h12.Hash()}
 
@@ -90,8 +132,156 @@ func TestIndexer_Live(t *testing.T) {
 		}
 	}
 
-	if indexer.head.number != 13 {
-		t.Errorf("expected head number 13, got %d", indexer.head.number)
+	if indexer.head.Number != 13 {
+		t.Errorf("expected head number 13, got %d", indexer.head.Number)
+	}
+}
+
+func TestIndexer_ProcessGapSplitsFinalizedAndUnfinalized(t *testing.T) {
+	ctx := t.Context()
+
+	headers := make(map[uint64]*types.Header)
+	headers[10] = &types.Header{Number: big.NewInt(10)}
+	for number := uint64(11); number <= 18; number++ {
+		headers[number] = &types.Header{
+			Number:     new(big.Int).SetUint64(number),
+			ParentHash: headers[number-1].Hash(),
+		}
+	}
+
+	hashNumbers := make(map[common.Hash]uint64, len(headers))
+	for number, h := range headers {
+		hashNumbers[h.Hash()] = number
+	}
+
+	var queries []ethereum.FilterQuery
+	client := &mockClient{
+		headerByNumberFunc: func(_ context.Context, number *big.Int) (*types.Header, error) {
+			if number.Int64() == int64(rpc.FinalizedBlockNumber) {
+				return headers[15], nil
+			}
+			return headers[number.Uint64()], nil
+		},
+		filterLogsFunc: func(_ context.Context, q ethereum.FilterQuery) ([]types.Log, error) {
+			queries = append(queries, q)
+			if q.BlockHash != nil {
+				return []types.Log{{BlockNumber: hashNumbers[*q.BlockHash]}}, nil
+			}
+
+			var logs []types.Log
+			for number := q.FromBlock.Uint64(); number <= q.ToBlock.Uint64(); number++ {
+				logs = append(logs, types.Log{BlockNumber: number})
+			}
+			return logs, nil
+		},
+	}
+
+	handler := &mockHandler{}
+	dataDir := t.TempDir()
+	indexer := indexerForHandler(client, handler, dataDir, 10)
+	if err := indexer.Process(ctx, headers[10]); err != nil {
+		t.Fatalf("process initial head: %v", err)
+	}
+
+	queries = nil
+	handler.processed = nil
+
+	if err := indexer.Process(ctx, headers[18]); err != nil {
+		t.Fatalf("process gap: %v", err)
+	}
+
+	if len(queries) != 4 {
+		t.Fatalf("expected one range and three hash queries, got %d", len(queries))
+	}
+	if queries[0].BlockHash != nil ||
+		queries[0].FromBlock.Uint64() != 11 ||
+		queries[0].ToBlock.Uint64() != 15 {
+		t.Fatalf("unexpected finalized query: %+v", queries[0])
+	}
+	for j, number := range []uint64{16, 17, 18} {
+		q := queries[j+1]
+		if q.BlockHash == nil || *q.BlockHash != headers[number].Hash() {
+			t.Fatalf("expected hash query for block %d, got %+v", number, q)
+		}
+	}
+
+	if len(handler.processed) != 8 {
+		t.Fatalf("expected eight processed logs, got %d", len(handler.processed))
+	}
+	for j, log := range handler.processed {
+		if want := uint64(j + 11); log.BlockNumber != want {
+			t.Fatalf("processed log %d at block %d, want %d", j, log.BlockNumber, want)
+		}
+	}
+	if indexer.head.Number != 18 || indexer.head.Hash != headers[18].Hash() {
+		t.Fatalf("unexpected head after gap: %+v", indexer.head)
+	}
+
+	var cp checkpoint[*mockHandler]
+	found, err := readBlob(dataDir, checkpointBlobName, &cp)
+	if err != nil {
+		t.Fatalf("read finalized checkpoint: %v", err)
+	}
+	if !found {
+		t.Fatal("expected finalized checkpoint")
+	}
+	if cp.Head.Number != 15 || cp.Head.Hash != headers[15].Hash() {
+		t.Fatalf("unexpected finalized checkpoint head: %+v", cp.Head)
+	}
+}
+
+func TestIndexer_ProcessRejectsNonCanonicalFinalizedGapTarget(t *testing.T) {
+	ctx := t.Context()
+
+	h10 := &types.Header{Number: big.NewInt(10)}
+	h11 := &types.Header{Number: big.NewInt(11), ParentHash: h10.Hash()}
+	h12 := &types.Header{Number: big.NewInt(12), ParentHash: h11.Hash()}
+	final := &types.Header{Number: big.NewInt(20)}
+
+	filterCalls := 0
+	client := &mockClient{
+		headerByNumberFunc: func(_ context.Context, number *big.Int) (*types.Header, error) {
+			if number.Int64() == int64(rpc.FinalizedBlockNumber) {
+				return final, nil
+			}
+			switch number.Uint64() {
+			case 10:
+				return h10, nil
+			case 11:
+				return h11, nil
+			case 12:
+				return h12, nil
+			default:
+				return nil, nil
+			}
+		},
+		filterLogsFunc: func(context.Context, ethereum.FilterQuery) ([]types.Log, error) {
+			filterCalls++
+			return nil, nil
+		},
+	}
+
+	handler := &mockHandler{}
+	indexer := indexerForHandler(client, handler, t.TempDir(), 10)
+	if err := indexer.Process(ctx, h10); err != nil {
+		t.Fatalf("process initial head: %v", err)
+	}
+
+	filterCalls = 0
+	nonCanonical := &types.Header{
+		Number:     big.NewInt(12),
+		ParentHash: h11.Hash(),
+		Extra:      []byte("non-canonical"),
+	}
+	if err := indexer.Process(ctx, nonCanonical); err == nil {
+		t.Fatal("expected non-canonical target error")
+	}
+
+	if filterCalls != 0 {
+		t.Fatalf("expected target validation before filtering logs, got %d calls", filterCalls)
+	}
+	if indexer.head.Number != 10 || indexer.head.Hash != h10.Hash() {
+		t.Fatalf("unexpected head after rejected target: %+v", indexer.head)
 	}
 }
 
@@ -99,12 +289,11 @@ func TestIndexer_Promote(t *testing.T) {
 	ctx := t.Context()
 
 	finalizedBlockNum := uint64(10)
+	finalized := &types.Header{Number: new(big.Int).SetUint64(finalizedBlockNum)}
 
 	client := &mockClient{
 		headerByNumberFunc: func(ctx context.Context, number *big.Int) (*types.Header, error) {
-			return &types.Header{
-				Number: big.NewInt(int64(finalizedBlockNum)),
-			}, nil
+			return finalized, nil
 		},
 		filterLogsFunc: func(ctx context.Context, q ethereum.FilterQuery) ([]types.Log, error) {
 			return nil, nil
@@ -117,12 +306,12 @@ func TestIndexer_Promote(t *testing.T) {
 	indexer := indexerForHandler(client, handler, dataDir, 10)
 	indexer.FinalityDepth = 2
 	indexer.CheckpointInterval = 1
-	if err := indexer.Sync(ctx); err != nil {
+	if err := indexer.Process(ctx, finalized); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	// Build a consecutive chain so no reorg is triggered.
-	h11 := &types.Header{Number: big.NewInt(11), ParentHash: indexer.head.hash}
+	h11 := &types.Header{Number: big.NewInt(11), ParentHash: indexer.head.Hash}
 	h12 := &types.Header{Number: big.NewInt(12), ParentHash: h11.Hash()}
 	h13 := &types.Header{Number: big.NewInt(13), ParentHash: h12.Hash()}
 
@@ -134,30 +323,28 @@ func TestIndexer_Promote(t *testing.T) {
 
 	// Head 13 >= staged(11) + finalityDepth(2), so the staged checkpoint
 	// at head 11 should have been promoted to finalized via Move.
-	cpb, err := readBlob(dataDir, checkpointBlobName)
+	var cp checkpoint[*mockHandler]
+	found, err := readBlob(dataDir, checkpointBlobName, &cp)
 	if err != nil {
 		t.Fatalf("load finalized: %v", err)
 	}
-	if len(cpb) == 0 {
+	if !found {
 		t.Fatal("expected finalized checkpoint after promote")
 	}
-	cp, err := unmarshalCheckpoint(cpb)
-	if err != nil {
-		t.Fatal("expected valid checkpoint")
-	}
-	if cp.head.number != 11 {
-		t.Errorf("expected finalized head 11 after promote, got %d", cp.head.number)
+	if cp.Head.Number != 11 {
+		t.Errorf("expected finalized head 11 after promote, got %d", cp.Head.Number)
 	}
 
 	// The staged key should be gone after the move.
-	if d, err := readBlob(dataDir, checkpointStagedBlobName); err != nil {
+	var staged checkpoint[*mockHandler]
+	if found, err := readBlob(dataDir, checkpointStagedBlobName, &staged); err != nil {
 		t.Fatalf("unexpected error loading staged: %v", err)
-	} else if d != nil {
-		t.Errorf("expected staged checkpoint to be moved away, got %d bytes", len(d))
+	} else if found {
+		t.Error("expected staged checkpoint to be moved away")
 	}
 
 	if indexer.staged != nil {
-		t.Errorf("expected staged to be reset after promote, got %d", indexer.staged.number)
+		t.Errorf("expected staged to be reset after promote, got %d", indexer.staged.Number)
 	}
 }
 
@@ -167,12 +354,11 @@ func TestIndexer_PromoteGuardNoStaged(t *testing.T) {
 	ctx := t.Context()
 
 	finalizedBlockNum := uint64(100)
+	finalized := &types.Header{Number: new(big.Int).SetUint64(finalizedBlockNum)}
 
 	client := &mockClient{
 		headerByNumberFunc: func(ctx context.Context, number *big.Int) (*types.Header, error) {
-			return &types.Header{
-				Number: big.NewInt(int64(finalizedBlockNum)),
-			}, nil
+			return finalized, nil
 		},
 		filterLogsFunc: func(ctx context.Context, q ethereum.FilterQuery) ([]types.Log, error) {
 			return nil, nil
@@ -185,7 +371,7 @@ func TestIndexer_PromoteGuardNoStaged(t *testing.T) {
 	indexer := indexerForHandler(client, handler, dataDir, 100)
 	indexer.FinalityDepth = 2
 	indexer.CheckpointInterval = 1
-	if err := indexer.Sync(ctx); err != nil {
+	if err := indexer.Process(ctx, finalized); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -193,9 +379,9 @@ func TestIndexer_PromoteGuardNoStaged(t *testing.T) {
 	// restore it) while head is well past finalityDepth. The promote check
 	// must be a no-op, not a crash.
 	indexer.staged = nil
-	indexer.head = &blockRef{number: 200, hash: common.HexToHash("0xabc")}
+	indexer.head = &blockRef{Number: 200, Hash: common.HexToHash("0xabc")}
 
-	h201 := &types.Header{Number: big.NewInt(201), ParentHash: indexer.head.hash}
+	h201 := &types.Header{Number: big.NewInt(201), ParentHash: indexer.head.Hash}
 
 	// This should NOT crash with "staged checkpoint missing from store".
 	if err := indexer.Process(ctx, h201); err != nil {
@@ -211,8 +397,6 @@ func TestIndexer_PromoteGuardNoStaged(t *testing.T) {
 
 func TestIndexer_Reorg(t *testing.T) {
 	ctx := t.Context()
-
-	finalizedBlockNum := uint64(10)
 
 	// Build a deterministic chain so the mock client can serve headersRange.
 	h10 := &types.Header{Number: big.NewInt(10)}
@@ -240,25 +424,13 @@ func TestIndexer_Reorg(t *testing.T) {
 	}
 
 	handler := &mockHandler{}
+	handler.state = []byte("restored_state")
 
 	dataDir := t.TempDir()
 
-	// Save a finalized checkpoint so Process can recover from a reorg.
-	cp := checkpoint{
-		head:  blockRef{number: finalizedBlockNum, hash: h10.Hash()},
-		state: []byte("restored_state"),
-	}
-	cpb, err := marshalCheckpoint(cp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := writeBlob(dataDir, checkpointBlobName, cpb); err != nil {
-		t.Fatal(err)
-	}
-
 	indexer := indexerForHandler(client, handler, dataDir, 10)
-	if err := indexer.Sync(ctx); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if err := indexer.Process(ctx, h10); err != nil {
+		t.Fatalf("process initial head: %v", err)
 	}
 
 	// Push a valid block.
@@ -266,7 +438,7 @@ func TestIndexer_Reorg(t *testing.T) {
 		t.Fatalf("process h11: %v", err)
 	}
 
-	// Corrupt handler state to prove the reorg path restores it.
+	// Corrupt indexed state to prove the reorg path restores it.
 	handler.state = []byte("corrupted")
 
 	// Push a block with the wrong parent hash to trigger a reorg.
@@ -279,11 +451,11 @@ func TestIndexer_Reorg(t *testing.T) {
 	}
 
 	if string(handler.state) != "restored_state" {
-		t.Errorf("expected handler state to be restored after reorg, got %q", handler.state)
+		t.Errorf("expected state to be restored after reorg, got %q", handler.state)
 	}
 
-	if indexer.head.number != 12 {
-		t.Errorf("expected head to be 12 after reorg recovery, got %d", indexer.head.number)
+	if indexer.head.Number != 12 {
+		t.Errorf("expected head to be 12 after reorg recovery, got %d", indexer.head.Number)
 	}
 }
 
@@ -291,26 +463,21 @@ func TestIndexer_Restore(t *testing.T) {
 	ctx := t.Context()
 
 	finalizedBlockNum := uint64(50)
+	finalized := &types.Header{Number: new(big.Int).SetUint64(finalizedBlockNum)}
 
-	cp := checkpoint{
-		head:  blockRef{number: 50, hash: common.HexToHash("0x123")},
-		state: []byte("restored_state"),
-	}
-	cpb, err := marshalCheckpoint(cp)
-	if err != nil {
-		t.Fatal(err)
+	cp := checkpoint[*mockHandler]{
+		Head:  blockRef{Number: finalizedBlockNum, Hash: finalized.Hash()},
+		State: &mockHandler{state: []byte("restored_state")},
 	}
 
 	dataDir := t.TempDir()
-	if err := writeBlob(dataDir, checkpointBlobName, cpb); err != nil {
+	if err := writeBlob(dataDir, checkpointBlobName, cp); err != nil {
 		t.Fatal(err)
 	}
 
 	client := &mockClient{
 		headerByNumberFunc: func(ctx context.Context, number *big.Int) (*types.Header, error) {
-			return &types.Header{
-				Number: big.NewInt(int64(finalizedBlockNum)),
-			}, nil
+			return finalized, nil
 		},
 		filterLogsFunc: func(ctx context.Context, q ethereum.FilterQuery) ([]types.Log, error) {
 			return nil, nil
@@ -320,125 +487,90 @@ func TestIndexer_Restore(t *testing.T) {
 	handler := &mockHandler{}
 
 	indexer := indexerForHandler(client, handler, dataDir, 10)
-	if err := indexer.Sync(ctx); err != nil {
+	if err := indexer.Process(ctx, finalized); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	if string(handler.state) != "restored_state" {
-		t.Errorf("expected handler state to be restored, got %s", handler.state)
+		t.Errorf("expected state to be restored, got %s", handler.state)
+	}
+	if indexer.State != handler {
+		t.Fatal("expected restore to preserve State identity")
 	}
 
-	if indexer.head.number != 50 {
-		t.Errorf("expected head to be 50, got %d", indexer.head.number)
-	}
-}
-
-func TestIndexer_InitCalledOnFreshStart(t *testing.T) {
-	ctx := t.Context()
-
-	finalizedBlockNum := uint64(10)
-
-	client := &mockClient{
-		headerByNumberFunc: func(ctx context.Context, number *big.Int) (*types.Header, error) {
-			return &types.Header{
-				Number: big.NewInt(int64(finalizedBlockNum)),
-			}, nil
-		},
-		filterLogsFunc: func(ctx context.Context, q ethereum.FilterQuery) ([]types.Log, error) {
-			return nil, nil
-		},
-	}
-
-	handler := &mockHandler{}
-	indexer := indexerForHandler(client, handler, t.TempDir(), 10)
-
-	if err := indexer.Sync(ctx); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if !handler.initCalled {
-		t.Error("expected Init to be called on fresh start")
+	if indexer.head.Number != 50 {
+		t.Errorf("expected head to be 50, got %d", indexer.head.Number)
 	}
 }
 
-func TestIndexer_InitSkippedOnRestore(t *testing.T) {
-	ctx := t.Context()
-
-	finalizedBlockNum := uint64(50)
-
-	cp := checkpoint{
-		head:  blockRef{number: 50, hash: common.HexToHash("0x123")},
-		state: []byte("restored_state"),
+func TestIndexer_HasAndClearCheckpoint(t *testing.T) {
+	dataDir := t.TempDir()
+	indexer := &Indexer[*mockHandler]{
+		DataDir: dataDir,
+		State:   &mockHandler{},
 	}
-	cpb, err := marshalCheckpoint(cp)
+
+	hasCheckpoint, err := indexer.HasCheckpoint()
 	if err != nil {
 		t.Fatal(err)
 	}
+	if hasCheckpoint {
+		t.Fatal("expected no checkpoint")
+	}
 
-	dataDir := t.TempDir()
-	if err := writeBlob(dataDir, checkpointBlobName, cpb); err != nil {
+	for name, data := range map[string][]byte{
+		checkpointBlobName:       []byte("finalized"),
+		checkpointStagedBlobName: []byte("staged"),
+		"cached":                 []byte("logs"),
+	} {
+		if err := writeBlob(dataDir, name, data); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	hasCheckpoint, err = indexer.HasCheckpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasCheckpoint {
+		t.Fatal("expected checkpoint")
+	}
+
+	if err := indexer.ClearCheckpoint(); err != nil {
 		t.Fatal(err)
 	}
 
-	client := &mockClient{
-		headerByNumberFunc: func(ctx context.Context, number *big.Int) (*types.Header, error) {
-			return &types.Header{
-				Number: big.NewInt(int64(finalizedBlockNum)),
-			}, nil
-		},
-		filterLogsFunc: func(ctx context.Context, q ethereum.FilterQuery) ([]types.Log, error) {
-			return nil, nil
-		},
+	hasCheckpoint, err = indexer.HasCheckpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasCheckpoint {
+		t.Fatal("expected checkpoint to be removed")
 	}
 
-	handler := &mockHandler{}
-	indexer := indexerForHandler(client, handler, dataDir, 10)
-
-	if err := indexer.Sync(ctx); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	var staged []byte
+	found, err := readBlob(dataDir, checkpointStagedBlobName, &staged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found {
+		t.Fatal("expected staged checkpoint to be removed")
 	}
 
-	if handler.initCalled {
-		t.Error("expected Init to be skipped when a checkpoint is restored")
+	var cached []byte
+	found, err = readBlob(dataDir, "cached", &cached)
+	if err != nil {
+		t.Fatal(err)
 	}
-}
-
-func TestIndexer_InitError(t *testing.T) {
-	ctx := t.Context()
-
-	finalizedBlockNum := uint64(10)
-
-	client := &mockClient{
-		headerByNumberFunc: func(ctx context.Context, number *big.Int) (*types.Header, error) {
-			return &types.Header{
-				Number: big.NewInt(int64(finalizedBlockNum)),
-			}, nil
-		},
-		filterLogsFunc: func(ctx context.Context, q ethereum.FilterQuery) ([]types.Log, error) {
-			return nil, nil
-		},
+	if !found {
+		t.Fatal("expected cached logs to be preserved")
 	}
-
-	wantErr := errors.New("init failed")
-	handler := &mockHandler{initErr: wantErr}
-	indexer := indexerForHandler(client, handler, t.TempDir(), 10)
-
-	err := indexer.Sync(ctx)
-	if err == nil {
-		t.Fatal("expected error from Init, got nil")
-	}
-	if !errors.Is(err, wantErr) {
-		t.Fatalf("expected error %v, got %v", wantErr, err)
-	}
-	if !handler.initCalled {
-		t.Error("expected Init to be called before failing")
-	}
-	if indexer.head != nil {
-		t.Error("expected indexer head to remain nil when Init fails")
+	if string(cached) != "logs" {
+		t.Fatalf("cached logs changed: got %q", cached)
 	}
 }
 
-func TestIndexer_LogsRangeCachesQueries(t *testing.T) {
+func TestIndexer_CachedLogsRangeCachesQueries(t *testing.T) {
 	filterCalls := 0
 	client := &mockClient{
 		filterLogsFunc: func(context.Context, ethereum.FilterQuery) ([]types.Log, error) {
@@ -446,7 +578,11 @@ func TestIndexer_LogsRangeCachesQueries(t *testing.T) {
 			return []types.Log{{BlockNumber: 12}}, nil
 		},
 	}
-	indexer := &Indexer{Client: client, DataDir: t.TempDir()}
+	indexer := &Indexer[*mockHandler]{
+		Client:  client,
+		DataDir: t.TempDir(),
+		State:   &mockHandler{},
+	}
 
 	for range 2 {
 		logs, err := indexer.CachedFilterLogs(t.Context(), Filter{}, BlockRange{From: 10, To: 20})
@@ -454,6 +590,35 @@ func TestIndexer_LogsRangeCachesQueries(t *testing.T) {
 			t.Fatalf("logs range: %v", err)
 		}
 		if len(logs) != 1 || logs[0].BlockNumber != 12 {
+			t.Fatalf("unexpected logs: %+v", logs)
+		}
+	}
+
+	if filterCalls != 1 {
+		t.Fatalf("expected one underlying log query, got %d", filterCalls)
+	}
+}
+
+func TestIndexer_CachedLogsRangeCachesEmptyQueries(t *testing.T) {
+	filterCalls := 0
+	client := &mockClient{
+		filterLogsFunc: func(context.Context, ethereum.FilterQuery) ([]types.Log, error) {
+			filterCalls++
+			return nil, nil
+		},
+	}
+	indexer := &Indexer[*mockHandler]{
+		Client:  client,
+		DataDir: t.TempDir(),
+		State:   &mockHandler{},
+	}
+
+	for range 2 {
+		logs, err := indexer.CachedFilterLogs(t.Context(), Filter{}, BlockRange{10, 20})
+		if err != nil {
+			t.Fatalf("logs range: %v", err)
+		}
+		if len(logs) != 0 {
 			t.Fatalf("unexpected logs: %+v", logs)
 		}
 	}

@@ -9,16 +9,16 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 )
 
-// checkpoint stores handler state at a specific chain head.
-type checkpoint struct {
-	head  blockRef
-	state []byte
+// checkpoint stores application state at a specific chain head.
+type checkpoint[T any] struct {
+	Head  blockRef
+	State T
 }
 
 // blockRef is a (number, hash) pair identifying a block.
 type blockRef struct {
-	number uint64
-	hash   common.Hash
+	Number uint64
+	Hash   common.Hash
 }
 
 // ChainReader provides access to Ethereum logs and block headers.
@@ -26,9 +26,6 @@ type ChainReader interface {
 	FilterLogs(context.Context, ethereum.FilterQuery) ([]types.Log, error)
 	HeaderByNumber(context.Context, *big.Int) (*types.Header, error)
 }
-
-// LogsRangeFunc returns matching logs for the inclusive block range [from, to].
-type LogsRangeFunc func(context.Context, Filter, uint64, uint64) ([]types.Log, error)
 
 // Filter specifies which logs the indexer fetches.
 type Filter struct {
@@ -58,4 +55,31 @@ func (f Filter) blockQuery(hash common.Hash) ethereum.FilterQuery {
 		Addresses: f.Addresses,
 		Topics:    f.Topics,
 	}
+}
+
+// BlockRange is an inclusive block range.
+type BlockRange struct {
+	From uint64
+	To   uint64
+}
+
+// ChunkBlockRange splits the inclusive block range [from, to] into ranges
+// containing at most size blocks.
+func ChunkBlockRange(from, to, size uint64) []BlockRange {
+	if size == 0 {
+		panic("invalid block range size: 0")
+	}
+	var chunks []BlockRange
+	for start := from; start <= to; {
+		end := to
+		if size-1 < to-start {
+			end = start + size - 1
+		}
+		chunks = append(chunks, BlockRange{From: start, To: end})
+		if end == to {
+			break
+		}
+		start = end + 1
+	}
+	return chunks
 }
