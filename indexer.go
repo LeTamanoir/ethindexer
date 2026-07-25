@@ -28,8 +28,15 @@ type State interface {
 	Process(context.Context, []types.Log) error
 }
 
-// Indexer indexes Ethereum logs into State from a finalized block onward,
-// handling reorgs and gob-encoded checkpoints.
+// Indexer indexes Ethereum logs into State, handling backfills, reorgs, and
+// gob-encoded checkpoints. The finalized checkpoint is the durable restart
+// point; a newer staged checkpoint is promoted once it has aged past
+// FinalityDepth.
+//
+//	Start block          Finalized checkpoint        Staged      Latest
+//	     |                          |                    |           |
+//	     S --------[...]----------- F ------------------ S --------- L
+//	                                  <- FinalityDepth ->
 type Indexer[S State] struct {
 	// Client provides access to Ethereum logs and block headers.
 	Client ChainReader

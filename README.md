@@ -3,11 +3,12 @@
 [![CI](https://github.com/LeTamanoir/ethindexer/actions/workflows/ci.yml/badge.svg)](https://github.com/LeTamanoir/ethindexer/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/LeTamanoir/ethindexer.svg)](https://pkg.go.dev/github.com/LeTamanoir/ethindexer)
 
-`ethindexer` is a lightweight Go library for indexing Ethereum logs.
+> [!WARNING]
+> This package is experimental and will likely have many breaking changes
+> before v1.
 
-It handles backfilling, live indexing, checkpointing, reorg recovery, and
-resumable restarts. Applications only need to provide state with a `Process`
-method.
+`ethindexer` is a lightweight Go library for indexing Ethereum logs into
+checkpointed application state.
 
 ## Install
 
@@ -15,36 +16,15 @@ method.
 go get github.com/LeTamanoir/ethindexer
 ```
 
-## Usage
-
-See [`examples/weth`](examples/weth) for a complete example.
-
 ## How it works
 
-The first call to `Process` restores the latest finalized checkpoint when one
-exists, then backfills through the supplied target. Pass a nil target to use
-the node's latest head.
+The first `Process` call restores any finalized checkpoint and backfills through
+the target. A nil target selects the latest head. Gaps use block-range queries
+through the finalized head and reorg-safe block-hash queries afterward. On a
+parent hash mismatch, the indexer restores the finalized checkpoint and replays
+the canonical chain.
 
-Each subsequent target is checked against the indexed head. Gaps use block-range
-queries through the finalized head and reorg-safe block-hash queries afterward.
-On a parent hash mismatch, the indexer restores the finalized checkpoint and
-replays the canonical chain.
-
-```text
-Start block               Finalized block           Staged      Latest
-     |                          |                     |           |
-     S --------[...]----------- F ------------------- S --------- L
-                                  <- FinalityDepth ->
-```
-
-The indexer keeps two checkpoints:
-
-* **Finalized (`F`)**: durable restart point.
-* **Staged (`S`)**: pending checkpoint promoted once it is old enough.
-
-This lets the indexer resume quickly while avoiding committing state that may still be affected by reorgs.
-
-### Indexing state
+## Usage
 
 State must provide a `Process` method:
 
@@ -72,40 +52,9 @@ if err := idx.Process(ctx, nil); err != nil {
 }
 ```
 
-`State` is automatically encoded into checkpoints with `encoding/gob`. It must
-be a pointer so checkpoints can restore it in place. Its persisted fields must
-be gob-compatible; state with custom serialization requirements can implement
-`gob.GobEncoder` and `gob.GobDecoder`.
+State is persisted with `encoding/gob`, so its data must be gob-compatible.
 
-Applications that need custom initialization can use `HasCheckpoint` before
-calling `Process`:
-
-```go
-hasCheckpoint, err := idx.HasCheckpoint()
-if err != nil {
-    return err
-}
-if !hasCheckpoint {
-    if err := state.Init(ctx); err != nil {
-        return err
-    }
-}
-```
-
-`CachedFilterLogs` is available for explicit historical block-range queries and
-caches results in `DataDir`. `ClearCheckpoint` removes finalized and staged
-checkpoints while preserving those cached ranges.
-
-`FromBlock` and `Filter` define the indexed log stream. Tunables such as
-`FinalityDepth`, `MaxBlockRange`, `CheckpointInterval`, and `MaxConcurrency`
-are configured directly on `Indexer`.
-
-## Development
-
-```bash
-just check
-go test ./...
-```
+See [`examples/weth`](examples/weth) for a complete example.
 
 ## License
 
