@@ -1,7 +1,9 @@
 package ethindexer
 
 import (
+	"bytes"
 	"context"
+	"encoding/gob"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum"
@@ -9,16 +11,36 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 )
 
-// checkpoint stores handler state at a specific chain head.
+// checkpoint stores application state at a specific chain head.
 type checkpoint struct {
-	head  blockRef
-	state []byte
+	Head  blockRef
+	State any
+}
+
+func (c checkpoint) GobEncode() ([]byte, error) {
+	var b bytes.Buffer
+	enc := gob.NewEncoder(&b)
+	if err := enc.Encode(c.Head); err != nil {
+		return nil, err
+	}
+	if err := enc.Encode(c.State); err != nil {
+		return nil, err
+	}
+	return b.Bytes(), nil
+}
+
+func (c *checkpoint) GobDecode(data []byte) error {
+	dec := gob.NewDecoder(bytes.NewReader(data))
+	if err := dec.Decode(&c.Head); err != nil {
+		return err
+	}
+	return dec.Decode(c.State)
 }
 
 // blockRef is a (number, hash) pair identifying a block.
 type blockRef struct {
-	number uint64
-	hash   common.Hash
+	Number uint64
+	Hash   common.Hash
 }
 
 // ChainReader provides access to Ethereum logs and block headers.
@@ -26,9 +48,6 @@ type ChainReader interface {
 	FilterLogs(context.Context, ethereum.FilterQuery) ([]types.Log, error)
 	HeaderByNumber(context.Context, *big.Int) (*types.Header, error)
 }
-
-// LogsRangeFunc returns matching logs for the inclusive block range [from, to].
-type LogsRangeFunc func(context.Context, Filter, uint64, uint64) ([]types.Log, error)
 
 // Filter specifies which logs the indexer fetches.
 type Filter struct {

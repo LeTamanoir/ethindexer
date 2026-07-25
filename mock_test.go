@@ -29,15 +29,20 @@ func (m *mockClient) FilterLogs(ctx context.Context, q ethereum.FilterQuery) ([]
 }
 
 type mockHandler struct {
-	filter      Filter
-	mu          sync.Mutex
-	processed   []types.Log
-	state       []byte
-	processErr  error
-	snapshotErr error
-	restoreErr  error
-	initCalled  bool
-	initErr     error
+	filter     Filter
+	mu         sync.Mutex
+	processed  []types.Log
+	state      []byte
+	processErr error
+}
+
+type plainState struct {
+	Value uint64
+}
+
+func (s *plainState) Process(_ context.Context, logs []types.Log) error {
+	s.Value += uint64(len(logs))
+	return nil
 }
 
 func (m *mockHandler) Filter() Filter {
@@ -46,20 +51,20 @@ func (m *mockHandler) Filter() Filter {
 	return m.filter
 }
 
-func (m *mockHandler) Snapshot(context.Context) ([]byte, error) {
+func (m *mockHandler) GobEncode() ([]byte, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.state, m.snapshotErr
+	return append([]byte(nil), m.state...), nil
 }
 
-func (m *mockHandler) Restore(_ context.Context, state []byte) error {
+func (m *mockHandler) GobDecode(state []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.state = state
-	return m.restoreErr
+	m.state = append(m.state[:0], state...)
+	return nil
 }
 
-func (m *mockHandler) Process(ctx context.Context, logs []types.Log) error {
+func (m *mockHandler) Process(_ context.Context, logs []types.Log) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.processErr != nil {
@@ -69,22 +74,12 @@ func (m *mockHandler) Process(ctx context.Context, logs []types.Log) error {
 	return nil
 }
 
-func (m *mockHandler) Init(ctx context.Context) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.initCalled = true
-	return m.initErr
-}
-
 func indexerForHandler(client ChainReader, handler *mockHandler, dataDir string, fromBlock uint64) *Indexer {
 	return &Indexer{
-		Client:       client,
-		DataDir:      dataDir,
-		FromBlock:    fromBlock,
-		Filter:       handler.Filter(),
-		InitFunc:     handler.Init,
-		ProcessFunc:  handler.Process,
-		SnapshotFunc: handler.Snapshot,
-		RestoreFunc:  handler.Restore,
+		Client:    client,
+		DataDir:   dataDir,
+		FromBlock: fromBlock,
+		Filter:    handler.Filter(),
+		State:     handler,
 	}
 }

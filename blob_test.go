@@ -13,12 +13,13 @@ func TestBlob_WriteRead(t *testing.T) {
 		t.Fatalf("failed to save: %v", err)
 	}
 
-	loaded, err := readBlob(dir, "testkey")
+	var loaded []byte
+	found, err := readBlob(dir, "testkey", &loaded)
 	if err != nil {
 		t.Fatalf("failed to load: %v", err)
 	}
-	if loaded == nil {
-		t.Fatal("expected data, got nil")
+	if !found {
+		t.Fatal("expected blob")
 	}
 	if string(loaded) != string(data) {
 		t.Errorf("data mismatch: got %q, want %q", loaded, data)
@@ -28,11 +29,12 @@ func TestBlob_WriteRead(t *testing.T) {
 func TestBlob_ReadNotFound(t *testing.T) {
 	dir := t.TempDir()
 
-	loaded, err := readBlob(dir, "missingkey")
+	var loaded []byte
+	found, err := readBlob(dir, "missingkey", &loaded)
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
-	if loaded != nil {
-		t.Errorf("expected nil for missing key, got %v", loaded)
+	if found {
+		t.Fatal("expected missing blob")
 	}
 }
