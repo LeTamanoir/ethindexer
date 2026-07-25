@@ -37,10 +37,8 @@ type Indexer struct {
 	// Filter specifies which logs the indexer fetches.
 	Filter Filter
 
-	// InitFunc optionally initializes application state on a fresh start. It
-	// receives Client and a LogsRangeFunc that caches block-range queries in
-	// DataDir.
-	InitFunc func(context.Context, ChainReader, LogsRangeFunc) error
+	// InitFunc optionally initializes application state on a fresh start.
+	InitFunc func(context.Context) error
 
 	// ProcessFunc applies matching logs in block order.
 	ProcessFunc func(context.Context, []types.Log) error
@@ -138,7 +136,7 @@ func (i *Indexer) Sync(ctx context.Context) error {
 
 	if !restored {
 		if i.InitFunc != nil {
-			if err := i.InitFunc(ctx, i.Client, i.logsRange); err != nil {
+			if err := i.InitFunc(ctx); err != nil {
 				return fmt.Errorf("init: %w", err)
 			}
 		}
@@ -405,8 +403,10 @@ func (i *Indexer) headersRange(ctx context.Context, from, to uint64) ([]*types.H
 	return heads, nil
 }
 
-func (i *Indexer) logsRange(ctx context.Context, filter Filter, from, to uint64) ([]types.Log, error) {
-	q := filter.rangeQuery(from, to)
+// CachedFilterLogs returns logs matching filter in the inclusive block range,
+// using the cache in DataDir when available.
+func (i *Indexer) CachedFilterLogs(ctx context.Context, f Filter, r BlockRange) ([]types.Log, error) {
+	q := f.rangeQuery(r)
 	key := logsBlobName(q)
 
 	bin, err := readBlob(i.DataDir, key)
@@ -452,7 +452,7 @@ func (i *Indexer) backfillFinalized(ctx context.Context, from, to uint64) error 
 	for _, ch := range chunks {
 		chunkStart := time.Now()
 
-		logs, err := i.logsRange(ctx, i.Filter, ch.From, ch.To)
+		logs, err := i.CachedFilterLogs(ctx, i.Filter, ch)
 		if err != nil {
 			return fmt.Errorf("get logs: %w", err)
 		}
