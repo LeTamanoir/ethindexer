@@ -424,7 +424,7 @@ func (i *Indexer[S]) CachedFilterLogs(ctx context.Context, f Filter, r BlockRang
 	q := f.rangeQuery(r)
 	key := logsKey(q)
 
-	var logs []types.Log
+	var logs logBatch
 	ok, err := readBlob(i.DataDir, key, &logs)
 	if err != nil {
 		return nil, fmt.Errorf("read cache: %w", err)
@@ -433,16 +433,16 @@ func (i *Indexer[S]) CachedFilterLogs(ctx context.Context, f Filter, r BlockRang
 		return logs, nil
 	}
 
-	logs, err = i.Client.FilterLogs(ctx, q)
+	fetched, err := i.Client.FilterLogs(ctx, q)
 	if err != nil {
 		return nil, fmt.Errorf("filter logs: %w", err)
 	}
 
-	if err := writeBlob(i.DataDir, key, logs); err != nil {
+	if err := writeBlob(i.DataDir, key, logBatch(fetched)); err != nil {
 		return nil, fmt.Errorf("write cache: %w", err)
 	}
 
-	return logs, nil
+	return fetched, nil
 }
 
 // backfillFinalized fetches and processes logs over [from, to.Number] in
@@ -540,5 +540,5 @@ func logsKey(q ethereum.FilterQuery) string {
 
 	hash := sha256.Sum256(b)
 
-	return fmt.Sprintf("logs-%d-%d-%s.gz", q.FromBlock, q.ToBlock, hex.EncodeToString(hash[:]))
+	return fmt.Sprintf("logs-v%d-%d-%d-%s.gz", logBatchEncodingVersion, q.FromBlock, q.ToBlock, hex.EncodeToString(hash[:]))
 }
