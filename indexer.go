@@ -66,8 +66,17 @@ type Indexer[S State] struct {
 	MaxConcurrency int
 
 	// State receives matching logs and is persisted in checkpoints with
-	// encoding/gob. It must be a pointer so checkpoints can restore it in place.
+	// encoding/gob. Set it to the initial state, used when DataDir has no
+	// checkpoint. Restoring a checkpoint replaces it, at startup or on a
+	// reorg, so read it through the Indexer rather than keeping a copy.
 	State S
+
+	// NewState returns an empty state for a checkpoint to be decoded into,
+	// with its maps allocated and its dependencies set. Gob decoding merges
+	// into what is already there, so restoring into the current State would
+	// keep data the checkpoint does not have. Empty maps are not encoded, so
+	// a map the constructor allocates stays allocated after a restore.
+	NewState func() S
 
 	head   *blockRef // head of the last indexed block
 	staged *blockRef // head of the staged checkpoint
@@ -133,6 +142,9 @@ func (i *Indexer[S]) init() error {
 	}
 	if i.DataDir == "" {
 		return errors.New("empty data directory")
+	}
+	if i.NewState == nil {
+		return errors.New("nil NewState")
 	}
 
 	i.LogFunc("Initializing indexer",
@@ -311,7 +323,7 @@ func (i *Indexer[S]) reorg(ctx context.Context, h *types.Header) error {
 func (i *Indexer[S]) restore() (bool, error) {
 	start := time.Now()
 
-	cp := checkpoint[S]{State: i.State}
+	cp := checkpoint[S]{State: i.NewState()}
 	ok, err := readBlob(i.DataDir, checkpointBlobName, &cp)
 	if err != nil {
 		return false, fmt.Errorf("read checkpoint: %w", err)

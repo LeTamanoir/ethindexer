@@ -557,22 +557,23 @@ func TestIndexer_Restore(t *testing.T) {
 		},
 	}
 
-	state := &plainState{}
+	initial := &plainState{Value: 7}
 	indexer := &Indexer[*plainState]{
 		Client:    client,
 		DataDir:   dataDir,
 		FromBlock: 10,
-		State:     state,
+		State:     initial,
+		NewState:  func() *plainState { return &plainState{} },
 	}
 	if err := indexer.Process(ctx, finalized); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if state.Value != 42 {
-		t.Errorf("expected state value 42, got %d", state.Value)
+	if indexer.State == initial {
+		t.Fatal("expected restore to replace the initial State")
 	}
-	if indexer.State != state {
-		t.Fatal("expected restore to preserve State identity")
+	if indexer.State.Value != 42 {
+		t.Errorf("expected state value 42, got %d", indexer.State.Value)
 	}
 
 	if indexer.head.Number != 50 {
