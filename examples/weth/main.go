@@ -127,11 +127,9 @@ func run() error {
 			Addresses: []common.Address{common.HexToAddress("0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2")},
 			Topics:    [][]common.Hash{{transferEventID, approvalEventID}},
 		},
-		LogFunc: slog.Info,
-		State: &WETH{
-			Balances:   make(map[common.Address]uint256.Int),
-			Allowances: make(map[common.Address]map[common.Address]uint256.Int),
-		},
+		LogFunc:  slog.Info,
+		State:    newWETH(),
+		NewState: newWETH,
 	}
 	if err := idx.Process(ctx, nil); err != nil {
 		return fmt.Errorf("process latest head: %w", err)
@@ -156,6 +154,13 @@ func run() error {
 
 			// Do whatever you want with handler state
 		}
+	}
+}
+
+func newWETH() *WETH {
+	return &WETH{
+		Balances:   make(map[common.Address]uint256.Int),
+		Allowances: make(map[common.Address]map[common.Address]uint256.Int),
 	}
 }
 

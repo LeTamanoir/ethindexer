@@ -36,6 +36,15 @@ type restoreState struct {
 
 func (s *restoreState) Process(context.Context, []types.Log) error { return nil }
 
+func newRestoreState(backend string) *restoreState {
+	return &restoreState{
+		Index:   map[string]int{},
+		Empty:   map[string]bool{},
+		Nested:  restoreNested{Counts: map[string]int{}},
+		backend: backend,
+	}
+}
+
 func (s *restoreState) add(name string, balance uint64) {
 	s.Index[name] = len(s.Items)
 	s.Items = append(s.Items, restoreItem{Name: name, Balance: balance})
@@ -67,17 +76,19 @@ func TestIndexer_ReorgRestoresCheckpointExactly(t *testing.T) {
 		},
 	}
 
-	state := &restoreState{
-		Index:   map[string]int{},
-		Empty:   map[string]bool{},
-		Nested:  restoreNested{Counts: map[string]int{"a": 1}},
-		backend: "rpc",
-	}
+	state := newRestoreState("rpc")
+	state.Nested.Counts["a"] = 1
 	state.add("alice", 0)
 	state.add("bob", 7)
 	state.Total = 7
 
-	indexer := &Indexer[*restoreState]{Client: client, DataDir: t.TempDir(), FromBlock: 10, State: state}
+	indexer := &Indexer[*restoreState]{
+		Client:    client,
+		DataDir:   t.TempDir(),
+		FromBlock: 10,
+		State:     state,
+		NewState:  func() *restoreState { return newRestoreState("rpc") },
+	}
 	if err := indexer.Process(ctx, h10); err != nil {
 		t.Fatal(err)
 	}
@@ -107,12 +118,13 @@ func TestIndexer_ReorgRestoresCheckpointExactly(t *testing.T) {
 		t.Fatalf("process h12 after reorg: %v", err)
 	}
 
-	if indexer.State != state {
-		t.Fatal("restore replaced the State pointer")
+	restored := indexer.State
+	if restored == state {
+		t.Fatal("reorg restored into the current State")
 	}
-	if !reflect.DeepEqual(state, want) {
-		t.Fatalf("state after reorg = %+v\nwant %+v", state, want)
+	if !reflect.DeepEqual(restored, want) {
+		t.Fatalf("state after reorg = %+v\nwant %+v", restored, want)
 	}
 	// Maps that were empty at the checkpoint stay usable.
-	state.Empty["y"] = true
+	restored.Empty["y"] = true
 }

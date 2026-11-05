@@ -81,5 +81,7 @@ func testIndexer(client ChainReader, handler *mockHandler, dataDir string, fromB
 		FromBlock: fromBlock,
 		Filter:    handler.Filter(),
 		State:     handler,
+		// mockHandler restores itself through GobDecode.
+		NewState: func() *mockHandler { return handler },
 	}
 }

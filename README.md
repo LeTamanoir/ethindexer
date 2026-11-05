@@ -33,9 +33,11 @@ func (s *State) Process(ctx context.Context, logs []types.Log) error
 ```
 
 ```go
-state := &WETH{
-    Balances:   make(map[common.Address]uint256.Int),
-    Allowances: make(map[common.Address]map[common.Address]uint256.Int),
+func newWETH() *WETH {
+    return &WETH{
+        Balances:   make(map[common.Address]uint256.Int),
+        Allowances: make(map[common.Address]map[common.Address]uint256.Int),
+    }
 }
 
 idx := &ethindexer.Indexer[*WETH]{
@@ -45,7 +47,8 @@ idx := &ethindexer.Indexer[*WETH]{
     Filter: ethindexer.Filter{
         Addresses: []common.Address{contractAddress},
     },
-    State: state,
+    State:    newWETH(),
+    NewState: newWETH,
 }
 if err := idx.Process(ctx, nil); err != nil {
     return err
@@ -53,6 +56,9 @@ if err := idx.Process(ctx, nil); err != nil {
 ```
 
 State is persisted with `encoding/gob`, so its data must be gob-compatible.
+`State` is the initial state, used when there is no checkpoint. Checkpoints are
+restored into a fresh value from `NewState` (at startup and on a reorg), which
+then replaces `State`, so always read the state through `idx.State`.
 
 See [`examples/weth`](examples/weth) for a complete example.
 
