@@ -311,6 +311,14 @@ func (i *Indexer[S]) reorg(ctx context.Context, h *types.Header) error {
 func (i *Indexer[S]) restore() (bool, error) {
 	start := time.Now()
 
+	// Reset only once a checkpoint exists: without one, State keeps what the
+	// caller initialized it with.
+	exists, err := i.HasCheckpoint()
+	if err != nil || !exists {
+		return false, err
+	}
+	resetState(i.State)
+
 	cp := checkpoint[S]{State: i.State}
 	ok, err := readBlob(i.DataDir, checkpointBlobName, &cp)
 	if err != nil {
